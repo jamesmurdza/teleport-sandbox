@@ -14,6 +14,7 @@ import {
 import { inspectLocalRepo } from './local-git.js';
 import { discoverSources } from './auth/sources.js';
 import { applyCredential } from './auth/importer.js';
+import { run, sandboxHome } from './sandbox-ops.js';
 import { resolveGitHubToken } from './git/auth.js';
 import { setupRepo } from './git/repo.js';
 import { AutoPush, type PushStatus } from './git/autopush.js';
@@ -143,7 +144,32 @@ export async function startNew(opts: StartOptions): Promise<void> {
     }
   }
 
+  // Pre-trust the working directory so Claude skips its folder-trust prompt.
+  if (opts.command === 'claude') {
+    await trustClaudeDir(sandbox, cwdInSandbox ?? (await sandboxHome(sandbox)));
+  }
+
   await runInteractive(sandbox, runCommand, cwdInSandbox, env, bar, autopush);
+}
+
+/**
+ * Marks a directory as trusted in the sandbox's ~/.claude.json so Claude does
+ * not show its "Is this a project you trust?" prompt on launch. Best-effort.
+ */
+async function trustClaudeDir(sandbox: import('@daytonaio/sdk').Sandbox, dir: string): Promise<void> {
+  try {
+    const home = await sandboxHome(sandbox);
+    const confPath = `${home}/.claude.json`;
+    const js =
+      `const fs=require('fs');const p=${JSON.stringify(confPath)};` +
+      `let c={};try{c=JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){}` +
+      `c.projects=c.projects||{};const d=${JSON.stringify(dir)};` +
+      `c.projects[d]={...(c.projects[d]||{}),hasTrustDialogAccepted:true,hasCompletedProjectOnboarding:true};` +
+      `fs.writeFileSync(p,JSON.stringify(c,null,2));`;
+    await run(sandbox, `node -e '${js.replace(/'/g, `'\\''`)}'`);
+  } catch (err) {
+    log(`note: could not pre-trust ${dir} for claude (${err instanceof Error ? err.message : err}).`);
+  }
 }
 
 /** Full flow for reconnecting to an existing session. */
