@@ -139,6 +139,10 @@ export async function overlayMenu<T>(
     const cleanup = (result: T | null) => {
       stdin.off('data', onData);
       stdin.setRawMode!(wasRaw);
+      // Pause stdin so a resumed TTY does not keep the event loop alive after a
+      // standalone menu closes (otherwise the process hangs instead of exiting).
+      // In-session callers re-resume stdin immediately after.
+      stdin.pause();
       // Restore previous screen (fullscreen), show cursor, restore autowrap.
       process.stdout.write(`${ESC}[?25h${ESC}[?7h` + (opts.fullscreen ? `${ESC}[?1049l` : ''));
       resolve(result);
