@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tmuxConf, writeStatusCommand } from '../src/tui/tmux.ts';
+import { tmuxConf, writeStatusCommand, displayBranch } from '../src/tui/tmux.ts';
+
+test('displayBranch strips the teleport wrapper and id suffix', () => {
+  assert.equal(displayBranch('teleport/agent/swift-quiet-n2xr/24cd570d'), 'agent/swift-quiet-n2xr');
+  assert.equal(displayBranch('teleport/main/abcd1234'), 'main');
+  // Non-teleport branches are unchanged.
+  assert.equal(displayBranch('feature/login'), 'feature/login');
+  assert.equal(displayBranch('main'), 'main');
+});
 
 test('tmuxConf enables a bottom status bar with our fields', () => {
   const conf = tmuxConf({ shortId: 'abcd1234', agent: 'claude', repo: 'o/r', branch: 'teleport/main/abcd1234' });
@@ -8,7 +16,8 @@ test('tmuxConf enables a bottom status bar with our fields', () => {
   assert.match(conf, /status-position bottom/);
   assert.ok(conf.includes('abcd1234'), 'includes sandbox short id');
   assert.ok(conf.includes('claude'), 'includes agent');
-  assert.ok(conf.includes('teleport/main/abcd1234'), 'includes branch');
+  assert.ok(conf.includes('↟ main'), 'shows the base branch, not the full teleport branch');
+  assert.ok(!conf.includes('teleport/main/abcd1234'), 'does not repeat the full branch');
   assert.match(conf, /cat \/tmp\/teleport-status/, 'reads live status file');
 });
 

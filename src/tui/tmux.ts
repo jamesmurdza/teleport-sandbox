@@ -19,12 +19,23 @@ function esc(v: string): string {
   return v.replace(/[\\"$#]/g, '\\$&');
 }
 
+/**
+ * Reduces a teleport working branch to the human base branch for display.
+ * `teleport/<base>/<sandbox-id>` -> `<base>` (the id is already shown on the
+ * left of the bar, and the `teleport/` prefix is constant). Other branch names
+ * are shown unchanged.
+ */
+export function displayBranch(branch: string): string {
+  if (!branch.startsWith('teleport/')) return branch;
+  return branch.slice('teleport/'.length).replace(/\/[0-9a-f]{6,}$/i, '');
+}
+
 /** Returns the tmux.conf contents for a session. */
 export function tmuxConf(info: BarInfo): string {
   const left = ` ⚡ ${info.shortId}  ${info.agent} `;
   const rightParts = [
     info.repo ? esc(info.repo) : '',
-    info.branch ? `↟ ${esc(info.branch)}` : '',
+    info.branch ? `↟ ${esc(displayBranch(info.branch))}` : '',
     `#(cat ${TMUX_STATUS_FILE} 2>/dev/null)`,
     'Ctrl-\\\\ menu',
   ].filter(Boolean);
