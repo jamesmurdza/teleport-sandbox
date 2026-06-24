@@ -1,6 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitiseRef, teleportBranch, shortSandboxId } from '../src/naming.ts';
+import { sanitiseRef, teleportBranch, shortSandboxId, sandboxName, slugifyName } from '../src/naming.ts';
+
+test('slugifyName produces DNS-style components', () => {
+  assert.equal(slugifyName('My Repo'), 'my-repo');
+  assert.equal(slugifyName('owner/Repo_Name'), 'owner-repo-name');
+  assert.equal(slugifyName('  '), '');
+});
+
+test('sandboxName combines prefix, slug, and suffix', () => {
+  assert.equal(sandboxName('teleport', 'myrepo', 'abc123'), 'teleport-myrepo-abc123');
+  // Empty slug is dropped; custom prefix honoured.
+  assert.equal(sandboxName('tp', null, 'abc'), 'tp-abc');
+  // Falls back to "teleport" if the prefix slugifies to empty.
+  assert.match(sandboxName('', 'r', 's'), /^teleport-r-s$/);
+});
 
 test('sanitiseRef strips illegal characters', () => {
   assert.equal(sanitiseRef('feature/Foo Bar'), 'feature/Foo-Bar');

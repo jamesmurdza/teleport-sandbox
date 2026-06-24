@@ -69,6 +69,7 @@ conversation). A live, still-running session reattaches to the exact process.
 | --- | --- |
 | `DAYTONA_API_KEY` | **Required.** Your Daytona API key. |
 | `TELEPORT_SNAPSHOT` | Base snapshot name. Default: `background-agents`. |
+| `TELEPORT_PREFIX` | Prefix for sandbox names (e.g. `teleport-myrepo-l8k2p9`). Default: `teleport`. |
 | `GH_TOKEN` / `GITHUB_TOKEN` | GitHub token for auto-push. If unset, `gh auth token` is used. |
 
 > The `background-agents` snapshot must exist in your Daytona org. Override the

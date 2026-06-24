@@ -29,3 +29,21 @@ export function teleportBranch(baseBranch: string, sandboxId: string): string {
 export function shortSandboxId(sandboxId: string): string {
   return sandboxId.replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'sandbox';
 }
+
+/** Lowercases and dash-joins a value into a DNS-style name component. */
+export function slugifyName(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Builds the sandbox name from the prefix, the repo/agent, and a unique suffix,
+ * e.g. `teleport-myrepo-l8k2p9`. Components that slugify to empty are dropped.
+ */
+export function sandboxName(prefix: string, slug: string | null, suffix: string): string {
+  return [slugifyName(prefix) || 'teleport', slugifyName(slug ?? ''), slugifyName(suffix)]
+    .filter(Boolean)
+    .join('-');
+}

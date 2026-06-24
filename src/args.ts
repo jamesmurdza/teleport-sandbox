@@ -66,5 +66,6 @@ Usage:
 Environment:
   DAYTONA_API_KEY                Required. Daytona API key.
   TELEPORT_SNAPSHOT              Base snapshot (default: background-agents).
+  TELEPORT_PREFIX                Sandbox name prefix (default: teleport).
   GH_TOKEN / GITHUB_TOKEN        GitHub token for auto-push (else uses \`gh auth token\`).
 `;

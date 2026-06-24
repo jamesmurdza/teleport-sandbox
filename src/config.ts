@@ -10,6 +10,9 @@
  */
 export const BASE_SNAPSHOT = process.env.TELEPORT_SNAPSHOT ?? 'background-agents';
 
+/** Prefix applied to the name of every sandbox teleport creates. */
+export const SANDBOX_PREFIX = process.env.TELEPORT_PREFIX ?? 'teleport';
+
 /** Absolute path inside the sandbox where the repo is cloned. */
 export const SANDBOX_REPO_PATH = '/home/daytona/repo';
 

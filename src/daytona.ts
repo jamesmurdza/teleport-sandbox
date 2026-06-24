@@ -3,7 +3,8 @@
  * talks to Daytona through this module, so SDK-specific details stay in one place.
  */
 import { Daytona, type Sandbox } from '@daytonaio/sdk';
-import { BASE_SNAPSHOT, LABELS } from './config.js';
+import { BASE_SNAPSHOT, LABELS, SANDBOX_PREFIX } from './config.js';
+import { sandboxName } from './naming.js';
 
 export type { Sandbox };
 
@@ -59,8 +60,14 @@ export async function createSandbox(params: CreateSessionParams): Promise<Sandbo
   if (params.repoSlug) labels[LABELS.repo] = params.repoSlug;
   if (params.baseBranch) labels[LABELS.base] = params.baseBranch;
 
+  // Name the sandbox so it is identifiable in the Daytona dashboard. The suffix
+  // keeps names unique across concurrent sessions.
+  const slug = params.repoSlug?.split('/').pop() || params.agent;
+  const suffix = `${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
+  const name = sandboxName(SANDBOX_PREFIX, slug, suffix);
+
   const sandbox = await daytona().create(
-    { snapshot: BASE_SNAPSHOT, labels, autoStopInterval: 30 },
+    { name, snapshot: BASE_SNAPSHOT, labels, autoStopInterval: 30 },
     { timeout: 180 },
   );
   return sandbox;
