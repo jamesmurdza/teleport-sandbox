@@ -50,9 +50,10 @@ teleport help                  Show help
 4. **Auto-push.** New commits made inside the sandbox are pushed to that branch
    automatically, via Daytona's git toolbox. **Your GitHub token is never written
    into the sandbox** — it's passed per-call from your machine.
-5. **Attach.** The agent runs under `dtach` and is streamed over a PTY with a
-   status bar on the bottom row. Press **Ctrl-\\** to detach; the agent keeps
-   running. Reconnect with `teleport`.
+5. **Attach.** The agent runs inside a `tmux` session in the sandbox and is
+   streamed over a PTY. tmux draws the bottom **status bar** natively (sandbox id,
+   agent, repo, branch, push status), so it never corrupts the agent's UI. Press
+   **Ctrl-\\** to detach; the agent keeps running. Reconnect with `teleport`.
 
 ### Detach & reconnect
 
@@ -90,7 +91,8 @@ npm run typecheck   # type-check without emitting
 ### Architecture
 
 All Daytona SDK calls go through `src/daytona.ts` and `src/sandbox-ops.ts`. The
-interactive PTY/status-bar streaming lives in `src/session.ts` and
-`src/tui/statusbar.ts`. Git clone + branch + auto-push are in `src/git/`.
-Credential discovery/import is in `src/auth/`. The CLI is wired in `src/cli.ts`
-and `src/runner.ts`.
+agent runs in a tmux session in the sandbox; locally `src/session.ts` is a dumb
+PTY passthrough and the status bar is rendered by tmux (config in
+`src/tui/tmux.ts`). Git clone + branch + auto-push are in `src/git/`. Credential
+discovery/import is in `src/auth/`. The CLI is wired in `src/cli.ts` and
+`src/runner.ts`.

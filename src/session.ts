@@ -1,52 +1,46 @@
 /**
- * Interactive session lifecycle: runs the agent under dtach inside the sandbox
- * and attaches a local PTY that streams stdin/stdout, with the status bar on the
- * reserved bottom row. Detaching (Ctrl-\, handled by dtach in the sandbox) leaves
- * the agent running; the same function is used to reconnect later.
+ * Interactive session lifecycle. The agent runs inside a tmux session in the
+ * sandbox; tmux draws the status bar natively. Locally we are a dumb PTY
+ * passthrough: stdin -> sandbox, sandbox -> stdout, plus resize forwarding.
+ *
+ * tmux gives us persistence for free: detaching (Ctrl-\, bound to detach-client)
+ * leaves the session running; reconnecting re-attaches the live agent. After an
+ * auto-stop + restart the in-memory tmux server is gone, so `new-session -A`
+ * recreates the session and relaunches the agent — the desired behaviour.
  */
 import type { Sandbox } from '@daytonaio/sdk';
-import { DTACH_SOCKET } from './config.js';
-import { ensureDtach } from './sandbox-ops.js';
-import { StatusBar } from './tui/statusbar.js';
+import { TMUX_CONF_PATH, TMUX_SESSION, TMUX_STATUS_FILE } from './config.js';
+import { ensureTmux, writeFileAbs } from './sandbox-ops.js';
+import { tmuxConf, type BarInfo } from './tui/tmux.js';
 
 export interface AttachOptions {
-  /** Command to run under dtach when no live session exists (e.g. "claude"). */
+  /** Command to run under tmux when the session does not already exist. */
   command: string;
   /** Working directory inside the sandbox. */
   cwd?: string;
   /** Env vars injected into the agent session (e.g. API keys). */
   env?: Record<string, string>;
-  statusBar: StatusBar;
+  /** Static fields shown in the tmux status bar. */
+  bar: BarInfo;
 }
 
 export type AttachOutcome = 'detached' | 'ended';
 
-/**
- * dtach command line. If a live socket exists we attach to it (reconnect to the
- * running agent); otherwise we create a new session running the command. The
- * socket lives in /tmp, so after an auto-stop + restart it is gone and the agent
- * is relaunched fresh — exactly the desired "restart on reattach" behaviour.
- */
-function dtachCommand(opts: AttachOptions, socketAlive: boolean): string {
-  // -z: ignore suspend key, -r winch: redraw via SIGWINCH (best for full-screen TUIs).
-  if (socketAlive) {
-    return `dtach -a ${DTACH_SOCKET} -z -r winch`;
-  }
-  return `dtach -A ${DTACH_SOCKET} -z -r winch ${opts.command}`;
+/** Single-quotes a string for safe use in a POSIX shell command. */
+function shquote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 /** Attaches the local terminal to the sandbox session. Resolves on detach/exit. */
 export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<AttachOutcome> {
-  await ensureDtach(sandbox);
+  await ensureTmux(sandbox);
 
-  const socketAlive = await sandbox.process
-    .executeCommand(`test -S ${DTACH_SOCKET} && echo alive || true`)
-    .then((r) => (r.result ?? '').includes('alive'))
-    .catch(() => false);
+  // Write the tmux config and initialise the live-status file.
+  await writeFileAbs(sandbox, TMUX_CONF_PATH, tmuxConf(opts.bar), '644');
+  await sandbox.process.executeCommand(`: > ${TMUX_STATUS_FILE}`).catch(() => {});
 
   const cols = process.stdout.columns ?? 80;
   const rows = process.stdout.rows ?? 24;
-  const agentRows = StatusBar.agentRows(rows);
   const sessionId = `teleport-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 
   const pty = await sandbox.process.createPty({
@@ -54,11 +48,8 @@ export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<Att
     cwd: opts.cwd,
     envs: opts.env,
     cols,
-    rows: agentRows,
+    rows,
     onData: (data: Uint8Array) => {
-      // Mark activity but do NOT paint here — painting mid-stream corrupts the
-      // agent's escape sequences. The status bar paints only when output is idle.
-      opts.statusBar.markData();
       process.stdout.write(Buffer.from(data));
     },
   });
@@ -67,25 +58,23 @@ export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<Att
     await pty.waitForConnection();
   }
 
-  // Start (or attach to) the dtach session.
-  await pty.sendInput(`${dtachCommand(opts, socketAlive)}\n`);
+  // exec so that when tmux detaches/exits the PTY closes and pty.wait() resolves.
+  const cwdArg = opts.cwd ? `-c ${shquote(opts.cwd)}` : '';
+  const cmd =
+    `exec tmux -f ${TMUX_CONF_PATH} new-session -A -s ${TMUX_SESSION} ${cwdArg} ` +
+    `${shquote(opts.command)}\n`;
+  await pty.sendInput(cmd);
 
-  // Wire up local terminal: raw mode + status bar + resize forwarding.
+  // Local terminal: raw passthrough + resize forwarding.
   const stdin = process.stdin;
   const wasRaw = stdin.isRaw ?? false;
   if (stdin.setRawMode) stdin.setRawMode(true);
   stdin.resume();
-  opts.statusBar.install();
-  process.stdout.write('\x1b[?25h'); // ensure cursor visible
 
   const onStdin = (chunk: Buffer) => void pty.sendInput(chunk);
   const onResize = () => {
-    const c = process.stdout.columns ?? 80;
-    const r = StatusBar.agentRows(process.stdout.rows ?? 24);
-    void pty.resize(c, r);
-    opts.statusBar.onResize();
+    void pty.resize(process.stdout.columns ?? 80, process.stdout.rows ?? 24);
   };
-
   stdin.on('data', onStdin);
   process.stdout.on('resize', onResize);
 
@@ -96,15 +85,21 @@ export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<Att
     process.stdout.off('resize', onResize);
     if (stdin.setRawMode) stdin.setRawMode(wasRaw);
     stdin.pause();
-    opts.statusBar.uninstall();
+    process.stdout.write('\x1b[?25h'); // ensure cursor visible
     await pty.disconnect().catch(() => {});
   }
 
-  // Distinguish detach (dtach socket still present) from the agent exiting.
+  // Detached if the tmux session still exists; otherwise the agent ended.
   const alive = await sandbox.process
-    .executeCommand(`test -S ${DTACH_SOCKET} && echo alive || true`)
+    .executeCommand(`tmux has-session -t ${TMUX_SESSION} 2>/dev/null && echo alive || true`)
     .then((r) => (r.result ?? '').includes('alive'))
     .catch(() => false);
 
   return alive ? 'detached' : 'ended';
+}
+
+/** Updates the live status text shown on the right of the tmux status bar. */
+export async function setLiveStatus(sandbox: Sandbox, text: string): Promise<void> {
+  const safe = text.replace(/'/g, `'\\''`);
+  await sandbox.process.executeCommand(`printf '%s' '${safe}' > ${TMUX_STATUS_FILE}`).catch(() => {});
 }

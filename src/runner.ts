@@ -17,8 +17,8 @@ import { applyCredential } from './auth/importer.js';
 import { resolveGitHubToken } from './git/auth.js';
 import { setupRepo } from './git/repo.js';
 import { AutoPush, type PushStatus } from './git/autopush.js';
-import { attach } from './session.js';
-import { StatusBar } from './tui/statusbar.js';
+import { attach, setLiveStatus } from './session.js';
+import type { BarInfo } from './tui/tmux.js';
 import { select, confirm } from './tui/prompt.js';
 
 function log(msg: string): void {
@@ -89,13 +89,11 @@ export async function startNew(opts: StartOptions): Promise<void> {
   // Clone repo + create teleport branch + start auto-push.
   let cwdInSandbox: string | undefined;
   let autopush: AutoPush | undefined;
-  let branch = '';
-  const bar = new StatusBar({
-    sandboxId: sandbox.id,
-    status: 'running',
+  const bar: BarInfo = {
+    shortId: sandbox.id.slice(0, 8),
     agent: opts.command,
     repo: repo?.slug ?? undefined,
-  });
+  };
 
   if (hasRepo && repo) {
     const creds = await resolveGitHubToken();
@@ -109,16 +107,15 @@ export async function startNew(opts: StartOptions): Promise<void> {
         creds: creds ?? { username: '', password: '', source: 'none' },
       });
       cwdInSandbox = setup.repoPath;
-      branch = setup.branch;
-      await tagBranch(sandbox, branch);
-      bar.update({ branch });
-      log(`cloned ${repo.slug} and checked out ${branch}.`);
+      bar.branch = setup.branch;
+      await tagBranch(sandbox, setup.branch);
+      log(`cloned ${repo.slug} and checked out ${setup.branch}.`);
       if (creds) {
         autopush = new AutoPush(sandbox, {
           repoPath: setup.repoPath,
-          branch,
+          branch: setup.branch,
           creds,
-          onStatus: (s, d) => bar.update({ push: pushLabel(s, d) }),
+          onStatus: (s, d) => void setLiveStatus(sandbox, pushLabel(s, d)),
         });
         autopush.start();
       }
@@ -135,13 +132,12 @@ export async function reconnect(session: Session): Promise<void> {
   log(`reconnecting to ${session.id} (${session.state})…`);
   await ensureStarted(session.sandbox);
 
-  const bar = new StatusBar({
-    sandboxId: session.id,
-    status: 'running',
+  const bar: BarInfo = {
+    shortId: session.id.slice(0, 8),
     agent: session.agent || session.command,
     repo: session.repo || undefined,
     branch: session.branch || undefined,
-  });
+  };
 
   // Best-effort re-inject env-var credentials (files already persist on disk).
   let env: Record<string, string> = {};
@@ -161,7 +157,7 @@ export async function reconnect(session: Session): Promise<void> {
         repoPath: SANDBOX_REPO_PATH,
         branch: session.branch,
         creds,
-        onStatus: (s, d) => bar.update({ push: pushLabel(s, d) }),
+        onStatus: (s, d) => void setLiveStatus(session.sandbox, pushLabel(s, d)),
       });
       autopush.start();
     }
@@ -175,10 +171,10 @@ async function runInteractive(
   command: string,
   cwd: string | undefined,
   env: Record<string, string>,
-  bar: StatusBar,
+  bar: BarInfo,
   autopush?: AutoPush,
 ): Promise<void> {
-  const outcome = await attach(sandbox, { command, cwd, env, statusBar: bar });
+  const outcome = await attach(sandbox, { command, cwd, env, bar });
   autopush?.stop();
   if (outcome === 'detached') {
     log(`detached. Reconnect with \`teleport\` (sandbox ${sandbox.id} keeps running, auto-stops when idle).`);

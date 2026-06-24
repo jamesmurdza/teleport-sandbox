@@ -13,8 +13,12 @@ export const BASE_SNAPSHOT = process.env.TELEPORT_SNAPSHOT ?? 'background-agents
 /** Absolute path inside the sandbox where the repo is cloned. */
 export const SANDBOX_REPO_PATH = '/home/daytona/repo';
 
-/** dtach socket path inside the sandbox (persists the agent across reconnects). */
-export const DTACH_SOCKET = '/tmp/teleport.dtach';
+/** tmux session name that persists the agent across reconnects. */
+export const TMUX_SESSION = 'teleport';
+/** Path to the generated tmux config inside the sandbox. */
+export const TMUX_CONF_PATH = '/tmp/teleport.tmux';
+/** File the tmux status line reads for live (push) status. */
+export const TMUX_STATUS_FILE = '/tmp/teleport-status';
 
 /** Labels used to tag and rediscover teleport sandboxes. */
 export const LABELS = {

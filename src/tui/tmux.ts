@@ -1,0 +1,56 @@
+/**
+ * Builds the tmux configuration that renders the teleport status bar. tmux owns
+ * the screen, so the bar is drawn natively and can never be corrupted by the
+ * agent's output (unlike a client-side overlay). Static fields (sandbox id,
+ * agent, repo, branch) are baked into the config; live push status is read from
+ * a file the status line `cat`s every couple of seconds.
+ */
+import { TMUX_STATUS_FILE } from '../config.js';
+
+export interface BarInfo {
+  shortId: string;
+  agent: string;
+  repo?: string;
+  branch?: string;
+}
+
+/** Escapes a value for safe inclusion inside a double-quoted tmux option. */
+function esc(v: string): string {
+  return v.replace(/[\\"$#]/g, '\\$&');
+}
+
+/** Returns the tmux.conf contents for a session. */
+export function tmuxConf(info: BarInfo): string {
+  const left = ` ⚡ ${info.shortId}  ${info.agent} `;
+  const rightParts = [
+    info.repo ? esc(info.repo) : '',
+    info.branch ? `↟ ${esc(info.branch)}` : '',
+    `#(cat ${TMUX_STATUS_FILE} 2>/dev/null)`,
+    'Ctrl-\\\\ detach',
+  ].filter(Boolean);
+  const right = ' ' + rightParts.join('  ·  ') + ' ';
+
+  return [
+    'set -g status on',
+    'set -g status-interval 2',
+    'set -g status-justify left',
+    'set -g status-position bottom',
+    'set -g status-style "bg=colour24,fg=colour255"',
+    `set -g status-left "#[bold]${esc(left)}#[nobold]"`,
+    'set -g status-left-length 80',
+    `set -g status-right "${right}"`,
+    'set -g status-right-length 200',
+    'set -g window-status-current-format ""',
+    'set -g window-status-format ""',
+    'set -g destroy-unattached off',
+    // Detach with Ctrl-\ (no prefix needed), matching the documented UX.
+    'bind-key -n C-\\\\ detach-client',
+    '',
+  ].join('\n');
+}
+
+/** Shell-escapes status text and returns a command to update the status file. */
+export function writeStatusCommand(text: string): string {
+  const safe = text.replace(/'/g, `'\\''`);
+  return `printf '%s' '${safe}' > ${TMUX_STATUS_FILE}`;
+}

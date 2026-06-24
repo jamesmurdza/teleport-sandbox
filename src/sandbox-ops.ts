@@ -1,7 +1,7 @@
 /**
  * Convenience operations performed *inside* a running sandbox: resolving the
  * home directory, writing files with restrictive permissions, running commands,
- * and ensuring dtach is installed.
+ * and ensuring tmux is installed.
  */
 import type { Sandbox } from '@daytonaio/sdk';
 import { posix } from 'node:path';
@@ -51,14 +51,29 @@ export async function writeHomeFile(
   await sandbox.fs.setFilePermissions(abs, { mode });
 }
 
-/** Ensures `dtach` is installed in the sandbox (no fallback, as designed). */
-export async function ensureDtach(sandbox: Sandbox): Promise<void> {
-  const check = await sandbox.process.executeCommand('command -v dtach || true');
+/** Writes a file at an absolute sandbox path, creating its parent directory. */
+export async function writeFileAbs(
+  sandbox: Sandbox,
+  absPath: string,
+  content: string,
+  mode = '644',
+): Promise<void> {
+  const dir = posix.dirname(absPath);
+  await sandbox.fs.createFolder(dir, '755').catch(() => {
+    /* already exists */
+  });
+  await sandbox.fs.uploadFile(Buffer.from(content, 'utf8'), absPath);
+  await sandbox.fs.setFilePermissions(absPath, { mode }).catch(() => {});
+}
+
+/** Ensures `tmux` is installed in the sandbox (it draws the status bar). */
+export async function ensureTmux(sandbox: Sandbox): Promise<void> {
+  const check = await sandbox.process.executeCommand('command -v tmux || true');
   if ((check.result ?? '').trim()) return;
   // Install non-interactively; works on the Debian-based background-agents image.
   await run(
     sandbox,
-    'sudo apt-get update -qq && sudo apt-get install -y -qq dtach',
+    'sudo apt-get update -qq && sudo apt-get install -y -qq tmux',
     { timeout: 180 },
   );
 }

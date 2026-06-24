@@ -1,7 +1,7 @@
 /**
  * Applies a chosen credential source to a sandbox: file-based credentials are
  * uploaded (chmod 600), env-based credentials are returned so the caller can
- * inject them into the agent's dtach session environment (kept out of shell
+ * inject them into the agent's tmux session environment (kept out of shell
  * history). The GitHub token is never handled here — it stays on the local
  * machine and is only ever passed per-call to the git toolbox.
  */
