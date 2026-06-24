@@ -56,8 +56,10 @@ export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<Att
     cols,
     rows: agentRows,
     onData: (data: Uint8Array) => {
+      // Mark activity but do NOT paint here — painting mid-stream corrupts the
+      // agent's escape sequences. The status bar paints only when output is idle.
+      opts.statusBar.markData();
       process.stdout.write(Buffer.from(data));
-      opts.statusBar.paint();
     },
   });
 
