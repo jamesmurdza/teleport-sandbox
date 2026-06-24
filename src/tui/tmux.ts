@@ -31,6 +31,10 @@ export function tmuxConf(info: BarInfo): string {
   const right = ' ' + rightParts.join('  ·  ') + ' ';
 
   return [
+    // Terminal capabilities: 256 colours + truecolor passthrough so the agent's
+    // colours and Unicode render correctly inside tmux.
+    'set -g default-terminal "screen-256color"',
+    'set -ga terminal-overrides ",*256col*:Tc"',
     'set -g status on',
     'set -g status-interval 2',
     'set -g status-justify left',

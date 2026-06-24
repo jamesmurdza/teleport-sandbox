@@ -43,10 +43,22 @@ export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<Att
   const rows = process.stdout.rows ?? 24;
   const sessionId = `teleport-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 
+  // A UTF-8 locale + the real TERM are essential for tmux to render wide/Unicode
+  // characters (box-drawing, emoji) and accept multibyte input correctly.
+  const localeLang =
+    process.env.LANG && /utf-?8/i.test(process.env.LANG) ? process.env.LANG : 'C.UTF-8';
+  const envs: Record<string, string> = {
+    LANG: localeLang,
+    LC_ALL: localeLang,
+    LC_CTYPE: localeLang,
+    TERM: process.env.TERM || 'xterm-256color',
+    ...opts.env,
+  };
+
   const pty = await sandbox.process.createPty({
     id: sessionId,
     cwd: opts.cwd,
-    envs: opts.env,
+    envs,
     cols,
     rows,
     onData: (data: Uint8Array) => {
@@ -59,9 +71,10 @@ export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<Att
   }
 
   // exec so that when tmux detaches/exits the PTY closes and pty.wait() resolves.
+  // -u forces tmux into UTF-8 mode regardless of how it detects the locale.
   const cwdArg = opts.cwd ? `-c ${shquote(opts.cwd)}` : '';
   const cmd =
-    `exec tmux -f ${TMUX_CONF_PATH} new-session -A -s ${TMUX_SESSION} ${cwdArg} ` +
+    `exec tmux -u -f ${TMUX_CONF_PATH} new-session -A -s ${TMUX_SESSION} ${cwdArg} ` +
     `${shquote(opts.command)}\n`;
   await pty.sendInput(cmd);
 

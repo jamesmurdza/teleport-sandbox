@@ -12,6 +12,12 @@ test('tmuxConf enables a bottom status bar with our fields', () => {
   assert.match(conf, /cat \/tmp\/teleport-status/, 'reads live status file');
 });
 
+test('tmuxConf sets terminal capabilities for colour/unicode', () => {
+  const conf = tmuxConf({ shortId: 'x', agent: 'claude' });
+  assert.match(conf, /default-terminal "screen-256color"/);
+  assert.match(conf, /terminal-overrides .*Tc/);
+});
+
 test('tmuxConf binds Ctrl-\\ to detach', () => {
   const conf = tmuxConf({ shortId: 'x', agent: 'claude' });
   assert.match(conf, /bind-key -n C-\\\\ detach-client/);
