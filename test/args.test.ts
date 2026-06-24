@@ -11,7 +11,23 @@ test('agent command -> run with args', () => {
     type: 'run',
     command: 'claude',
     args: ['--resume', 'x'],
+    yolo: false,
   });
+});
+
+test('--yolo before the command sets the yolo flag', () => {
+  assert.deepEqual(parseArgs(['--yolo', 'claude']), {
+    type: 'run',
+    command: 'claude',
+    args: [],
+    yolo: true,
+  });
+  assert.equal((parseArgs(['-y', 'codex', 'exec']) as { yolo: boolean }).yolo, true);
+  assert.equal((parseArgs(['--dangerous', 'gemini']) as { yolo: boolean }).yolo, true);
+});
+
+test('--yolo with no command is an error', () => {
+  assert.equal(parseArgs(['--yolo']).type, 'error');
 });
 
 test('help variants', () => {

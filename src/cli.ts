@@ -115,7 +115,7 @@ async function dispatch(cmd: Command): Promise<number> {
     case 'push':
       return pushCommand(cmd.id);
     case 'run':
-      await startNew({ command: cmd.command, args: cmd.args });
+      await startNew({ command: cmd.command, args: cmd.args, yolo: cmd.yolo });
       return 0;
   }
 }

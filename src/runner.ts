@@ -3,7 +3,7 @@
  * existing one: ties together repo inspection, the credential modal, sandbox
  * creation, repo clone + teleport branch, auto-push, and the interactive attach.
  */
-import { knownAgent, SANDBOX_REPO_PATH } from './config.js';
+import { knownAgent, yoloFlagFor, SANDBOX_REPO_PATH } from './config.js';
 import {
   createSandbox,
   ensureStarted,
@@ -28,13 +28,21 @@ function log(msg: string): void {
 export interface StartOptions {
   command: string;
   args: string[];
+  /** Append the agent's permission-skipping ("yolo") flag. */
+  yolo?: boolean;
 }
 
 /** Full flow for `teleport <command>`. */
 export async function startNew(opts: StartOptions): Promise<void> {
   const cwd = process.cwd();
   const repo = await inspectLocalRepo(cwd);
-  const runCommand = [opts.command, ...opts.args].join(' ');
+
+  // Insert the agent's yolo/dangerous flag right after the command name.
+  const yoloFlag = opts.yolo ? yoloFlagFor(opts.command) : undefined;
+  if (opts.yolo && !yoloFlag) {
+    log(`warning: no permission-skip flag known for "${opts.command}"; ignoring --yolo.`);
+  }
+  const runCommand = [opts.command, yoloFlag, ...opts.args].filter(Boolean).join(' ');
 
   const hasRepo = !!(repo && repo.originUrl);
   if (!hasRepo) {

@@ -25,7 +25,7 @@ Requires Node ≥ 20.
 ## Usage
 
 ```
-teleport <command> [args...]   Create (or reconnect to) a sandbox and run <command>
+teleport [--yolo] <command> [args...]  Create (or reconnect to) a sandbox and run <command>
 teleport                       List open sessions and reconnect to one
 teleport ls                    List open sessions (non-interactive)
 teleport stop <id>             Stop a sandbox (it can be restarted on reconnect)
@@ -34,6 +34,21 @@ teleport push [<id>]           Push pending commits now
 teleport doctor                Preflight diagnostics
 teleport help                  Show help
 ```
+
+### Skipping permission prompts (`--yolo`)
+
+Pass `--yolo` (or `--dangerous` / `-y`) before the command to append the agent's
+permission/approval-skipping flag, so it runs without prompting:
+
+```
+teleport --yolo claude     # -> claude --dangerously-skip-permissions
+teleport --yolo codex      # -> codex --yolo
+teleport --yolo gemini     # -> gemini --yolo
+```
+
+Known mappings: `claude` → `--dangerously-skip-permissions`, `codex` → `--yolo`,
+`gemini` → `--yolo`, `copilot` → `--autopilot`, `kilo` → `--auto`. Other commands
+warn and run unchanged.
 
 ### What happens on `teleport claude`
 

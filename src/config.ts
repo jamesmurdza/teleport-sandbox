@@ -97,3 +97,21 @@ export const AGENTS: Record<string, AgentDef> = {
 export function knownAgent(command: string): AgentDef | undefined {
   return AGENTS[command];
 }
+
+/**
+ * Per-agent flag that skips permission/approval prompts ("yolo"/dangerous mode),
+ * applied when teleport is run with --yolo. Only agents with a known flag are
+ * listed; others are left untouched.
+ */
+export const YOLO_FLAGS: Record<string, string> = {
+  claude: '--dangerously-skip-permissions',
+  codex: '--yolo',
+  copilot: '--autopilot',
+  gemini: '--yolo',
+  kilo: '--auto',
+};
+
+/** Returns the yolo/dangerous flag for a command, if one is known. */
+export function yoloFlagFor(command: string): string | undefined {
+  return YOLO_FLAGS[command];
+}

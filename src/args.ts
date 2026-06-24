@@ -19,16 +19,28 @@ export type Command =
   | { type: 'stop'; id: string }
   | { type: 'rm'; id: string }
   | { type: 'push'; id?: string }
-  | { type: 'run'; command: string; args: string[] };
+  | { type: 'run'; command: string; args: string[]; yolo: boolean };
 
 export type ParseResult = Command | { type: 'error'; message: string };
 
 const RESERVED = new Set(['ls', 'stop', 'rm', 'push', 'doctor', 'help']);
 
-export function parseArgs(argv: string[]): ParseResult {
-  const [first, ...rest] = argv;
+const YOLO_FLAGS = new Set(['--yolo', '--dangerous', '-y']);
 
-  if (first === undefined) return { type: 'list' };
+export function parseArgs(argv: string[]): ParseResult {
+  // Peel leading teleport options (currently just --yolo) before the command.
+  let yolo = false;
+  let i = 0;
+  while (i < argv.length && YOLO_FLAGS.has(argv[i])) {
+    yolo = true;
+    i++;
+  }
+  const [first, ...rest] = argv.slice(i);
+
+  if (first === undefined) {
+    if (yolo) return { type: 'error', message: '--yolo requires a command, e.g. `teleport --yolo claude`.' };
+    return { type: 'list' };
+  }
   if (first === '--help' || first === '-h' || first === 'help') return { type: 'help' };
   if (first === 'ls') return { type: 'ls' };
   if (first === 'doctor') return { type: 'doctor' };
@@ -48,13 +60,13 @@ export function parseArgs(argv: string[]): ParseResult {
     // Defensive: should be handled above.
     return { type: 'error', message: `Unhandled subcommand: ${first}` };
   }
-  return { type: 'run', command: first, args: rest };
+  return { type: 'run', command: first, args: rest, yolo };
 }
 
 export const USAGE = `teleport — run an AI agent in a fresh Daytona sandbox
 
 Usage:
-  teleport <command> [args...]   Create (or reconnect to) a sandbox and run <command>
+  teleport [--yolo] <command> [args...]  Create (or reconnect to) a sandbox and run <command>
   teleport                       List open sessions and reconnect
   teleport ls                    List open sessions (non-interactive)
   teleport stop <id>             Stop a sandbox
@@ -62,6 +74,11 @@ Usage:
   teleport push [<id>]           Push pending commits for a session now
   teleport doctor                Run preflight diagnostics
   teleport help                  Show this help
+
+Options:
+  --yolo, --dangerous, -y        Skip the agent's permission/approval prompts
+                                 (e.g. claude --dangerously-skip-permissions,
+                                 codex --yolo, gemini --yolo).
 
 Environment:
   DAYTONA_API_KEY                Required. Daytona API key.
