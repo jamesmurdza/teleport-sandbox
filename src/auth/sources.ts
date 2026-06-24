@@ -13,12 +13,20 @@ import type { AgentDef } from '../config.js';
 
 const exec = promisify(execFile);
 
+/** A file to write into the sandbox, relative to the user's home. */
+export interface SandboxFile {
+  sandboxRelPath: string;
+  content: string;
+}
+
 /** What importing a source actually does inside the sandbox. */
 export interface CredentialPayload {
   /** Inject an env var into the agent's session. */
   env?: { name: string; value: string };
   /** Upload a credential file (path relative to the sandbox home). */
-  file?: { sandboxRelPath: string; content: string };
+  file?: SandboxFile;
+  /** Additional config files copied alongside the credential file. */
+  companions?: SandboxFile[];
 }
 
 export interface DiscoveredSource {
@@ -71,9 +79,22 @@ async function readIfExists(path: string): Promise<string | null> {
   }
 }
 
+/** Reads the agent's companion config files that exist locally. */
+async function readCompanions(agent: AgentDef): Promise<SandboxFile[]> {
+  if (!agent.companionFiles) return [];
+  const files: SandboxFile[] = [];
+  for (const f of agent.companionFiles) {
+    const content = await readIfExists(join(homedir(), f.local));
+    if (content) files.push({ sandboxRelPath: f.sandbox, content });
+  }
+  return files;
+}
+
 /** Returns all credential sources detected for the given agent. */
 export async function discoverSources(agent: AgentDef): Promise<DiscoveredSource[]> {
   const sources: DiscoveredSource[] = [];
+  // Companion config files travel with file/keychain (subscription) imports.
+  const companions = await readCompanions(agent);
 
   // 1. API key env var.
   if (agent.apiKeyEnv) {
@@ -96,7 +117,7 @@ export async function discoverSources(agent: AgentDef): Promise<DiscoveredSource
         kind: 'keychain',
         label: 'Use macOS keychain credentials',
         detail: `keychain "${agent.keychainService}" -> ~/${agent.sandboxCredFile}`,
-        payload: { file: { sandboxRelPath: agent.sandboxCredFile, content: secret } },
+        payload: { file: { sandboxRelPath: agent.sandboxCredFile, content: secret }, companions },
       });
     }
   }
@@ -109,7 +130,7 @@ export async function discoverSources(agent: AgentDef): Promise<DiscoveredSource
         kind: 'file',
         label: `Use local ~/${agent.localCredFile}`,
         detail: `copy to ~/${agent.sandboxCredFile} in the sandbox`,
-        payload: { file: { sandboxRelPath: agent.sandboxCredFile, content } },
+        payload: { file: { sandboxRelPath: agent.sandboxCredFile, content }, companions },
       });
     }
   }

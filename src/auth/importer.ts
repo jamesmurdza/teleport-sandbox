@@ -34,6 +34,15 @@ export async function applyCredential(
     summary = ok
       ? `wrote ${abs} (${stat.size} bytes, owner ${stat.owner} mode ${stat.mode}; sandbox user ${user})`
       : `WARNING: credential file ${abs} is missing or empty after write (sandbox user ${user})`;
+
+    // Companion config files (e.g. ~/.claude.json) so the agent recognises the login.
+    for (const c of payload.companions ?? []) {
+      const cabs = await writeHomeFile(sandbox, c.sandboxRelPath, c.content, '600');
+      const cstat = await statFile(sandbox, cabs);
+      summary += cstat.exists
+        ? `; also wrote ${c.sandboxRelPath} (${cstat.size} bytes)`
+        : `; WARNING: failed to write ${c.sandboxRelPath}`;
+    }
   }
 
   if (payload.env) {

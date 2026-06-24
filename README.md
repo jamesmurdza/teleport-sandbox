@@ -82,6 +82,10 @@ conversation). A live, still-running session reattaches to the exact process.
 | `codex` | `OPENAI_API_KEY` | — | `~/.codex/auth.json` |
 | `opencode` | — | — | `~/.local/share/opencode/auth.json` |
 
+For subscription (keychain/file) imports, `claude` also copies `~/.claude.json`
+(account + onboarding state) so the agent recognises the login instead of
+re-running onboarding. API-key (env var) imports skip it.
+
 ## Development
 
 ```bash
