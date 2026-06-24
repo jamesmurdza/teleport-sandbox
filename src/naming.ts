@@ -25,7 +25,7 @@ export function teleportBranch(baseBranch: string, sandboxId: string): string {
   return `teleport/${base}/${shortId}`;
 }
 
-/** First 8 chars of the sandbox id, sanitised, used as a unique branch suffix. */
+/** First 8 alphanumerics of the sandbox id, used as a unique branch suffix. */
 export function shortSandboxId(sandboxId: string): string {
-  return sanitiseRef(sandboxId).replace(/\//g, '').slice(0, 8) || 'sandbox';
+  return sandboxId.replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'sandbox';
 }
