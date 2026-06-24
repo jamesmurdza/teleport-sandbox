@@ -6,7 +6,7 @@ import { TeleportError, getSession, listSessions, type Session } from './daytona
 import { startNew, reconnect } from './runner.js';
 import { runDoctor } from './doctor.js';
 import { inspectLocalRepo } from './local-git.js';
-import { select, confirm } from './tui/prompt.js';
+import { overlayMenu, overlayConfirm } from './tui/overlay.js';
 
 function out(msg: string): void {
   process.stdout.write(msg + '\n');
@@ -56,13 +56,17 @@ async function pickerCommand(): Promise<number> {
     return 0;
   }
 
-  const choice = await select('Open sessions — reconnect to one:', [
-    ...sessions.map((s) => ({
-      label: formatSession(s),
-      value: s as Session | 'new' | null,
-    })),
-    { label: 'Start a new session here', value: 'new' as const },
-  ]);
+  const choice = await overlayMenu(
+    'Open sessions — reconnect to one:',
+    [
+      ...sessions.map((s) => ({
+        label: formatSession(s),
+        value: s as Session | 'new' | null,
+      })),
+      { label: 'Start a new session here', value: 'new' as const },
+    ],
+    { fullscreen: true },
+  );
 
   if (!choice) return 0;
   if (choice === 'new') {
@@ -81,7 +85,7 @@ async function stopCommand(id: string): Promise<number> {
 }
 
 async function rmCommand(id: string): Promise<number> {
-  if (!(await confirm(`Delete sandbox ${id}? This is irreversible.`, false))) {
+  if (!(await overlayConfirm(`Delete sandbox ${id}? This is irreversible.`, { fullscreen: true }))) {
     out('Cancelled.');
     return 0;
   }

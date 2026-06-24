@@ -1,9 +1,13 @@
 /**
  * A centered modal overlay menu: draws a bordered box in the middle of the
- * terminal, on top of whatever is already on screen, and lets the user pick with
- * arrow keys. Used for the in-session Ctrl-\ menu so it floats over the agent
- * rather than clearing the screen. The caller repaints the underlying app after
- * the overlay closes.
+ * terminal and lets the user pick with arrow keys.
+ *
+ * Two modes:
+ *  - overlay (default): drawn on top of whatever is on screen (used for the
+ *    in-session Ctrl-\ menu, floating over the agent). The caller repaints after.
+ *  - fullscreen: switches to the alternate screen first so the box appears on a
+ *    clean background; the previous screen is restored exactly on close (used for
+ *    the startup credential modal, session picker, and confirmations).
  */
 import { decodeKey } from './prompt.js';
 
@@ -12,7 +16,13 @@ const BOX = { tl: '╭', tr: '╮', bl: '╰', br: '╯', h: '─', v: '│' };
 
 export interface OverlayItem<T> {
   label: string;
+  detail?: string;
   value: T;
+}
+
+export interface OverlayOptions {
+  /** Use the alternate screen so the box shows on a clean, restorable background. */
+  fullscreen?: boolean;
 }
 
 /** Approximate display width (treats each code point as one column). */
@@ -23,6 +33,10 @@ function width(s: string): number {
 function padTo(s: string, w: number): string {
   const pad = w - width(s);
   return pad > 0 ? s + ' '.repeat(pad) : s;
+}
+
+function truncate(s: string, w: number): string {
+  return width(s) > w ? [...s].slice(0, w).join('') : s;
 }
 
 export interface BoxGeometry {
@@ -36,27 +50,26 @@ export interface BoxGeometry {
 /** Computes a centered box big enough for the title, items, and hint. */
 export function computeBox(
   title: string,
-  labels: string[],
+  lineWidths: number[],
   cols: number,
   rows: number,
   hint: string,
 ): BoxGeometry {
-  const contentW = Math.max(
-    width(title) + 2,
-    ...labels.map((l) => width(l) + 4),
-    width(hint) + 2,
-    20,
-  );
+  const contentW = Math.max(width(title) + 2, ...lineWidths.map((w) => w + 4), width(hint) + 2, 20);
   const innerWidth = Math.min(contentW, Math.max(8, cols - 4));
   const boxWidth = innerWidth + 2;
-  const height = labels.length + 3; // top + items + hint + bottom
+  const height = lineWidths.length + 3; // top + items + hint + bottom
   const startCol = Math.max(1, Math.floor((cols - boxWidth) / 2) + 1);
   const startRow = Math.max(1, Math.floor((rows - height) / 2) + 1);
   return { innerWidth, width: boxWidth, height, startRow, startCol };
 }
 
 /** Shows a centered menu; resolves to the chosen value, or null if cancelled. */
-export async function overlayMenu<T>(title: string, items: OverlayItem<T>[]): Promise<T | null> {
+export async function overlayMenu<T>(
+  title: string,
+  items: OverlayItem<T>[],
+  opts: OverlayOptions = {},
+): Promise<T | null> {
   const stdin = process.stdin;
   if (items.length === 0) return null;
   if (!stdin.isTTY || !stdin.setRawMode) return null;
@@ -67,22 +80,31 @@ export async function overlayMenu<T>(title: string, items: OverlayItem<T>[]): Pr
   const draw = () => {
     const cols = process.stdout.columns ?? 80;
     const rows = process.stdout.rows ?? 24;
-    const g = computeBox(title, items.map((i) => i.label), cols, rows, hint);
+    const widths = items.map((it) => width(it.label) + (it.detail ? width(it.detail) + 2 : 0));
+    const g = computeBox(title, widths, cols, rows, hint);
     const at = (r: number, c: number) => `${ESC}[${r};${c}H`;
     const lines: string[] = [];
 
     // Top border with embedded title.
     const titleSeg = `${BOX.h} ${title} `;
-    lines.push(BOX.tl + padTo(titleSeg, g.innerWidth).replace(/ +$/g, (m) => BOX.h.repeat(m.length)) + BOX.tr);
+    lines.push(
+      BOX.tl + padTo(titleSeg, g.innerWidth).replace(/ +$/g, (m) => BOX.h.repeat(m.length)) + BOX.tr,
+    );
 
-    // Item rows.
+    // Item rows (label + optional dim detail), truncated to fit.
     items.forEach((it, i) => {
       const selected = i === index;
       const marker = selected ? '❯' : ' ';
-      let inner = padTo(` ${marker} ${it.label}`, g.innerWidth);
-      if (width(inner) > g.innerWidth) inner = [...inner].slice(0, g.innerWidth).join('');
-      const body = selected ? `${ESC}[7m${inner}${ESC}[0m` : inner;
-      lines.push(BOX.v + body + BOX.v);
+      const text = truncate(`${marker} ${it.label}`, g.innerWidth - 1);
+      let inner = ` ${text}`;
+      if (it.detail) {
+        const room = g.innerWidth - width(inner) - 2;
+        if (room > 1) inner = padTo(inner, width(inner)) + `  ${ESC}[2m${truncate(it.detail, room)}${ESC}[22m`;
+      }
+      // Pad the visible part to innerWidth (ignoring the dim escape codes).
+      const visibleLen = width(inner.replace(/\x1b\[[0-9;]*m/g, ''));
+      const body = inner + ' '.repeat(Math.max(0, g.innerWidth - visibleLen));
+      lines.push(BOX.v + (selected ? `${ESC}[7m${body}${ESC}[0m` : body) + BOX.v);
     });
 
     // Hint row + bottom border.
@@ -97,7 +119,8 @@ export async function overlayMenu<T>(title: string, items: OverlayItem<T>[]): Pr
     process.stdout.write(out);
   };
 
-  process.stdout.write(`${ESC}[?25l${ESC}[?7l`); // hide cursor; disable autowrap
+  // Enter alt-screen for fullscreen mode; always hide cursor + disable autowrap.
+  process.stdout.write((opts.fullscreen ? `${ESC}[?1049h${ESC}[2J${ESC}[H` : '') + `${ESC}[?25l${ESC}[?7l`);
   const wasRaw = stdin.isRaw ?? false;
   stdin.setRawMode(true);
   stdin.resume();
@@ -107,7 +130,8 @@ export async function overlayMenu<T>(title: string, items: OverlayItem<T>[]): Pr
     const cleanup = (result: T | null) => {
       stdin.off('data', onData);
       stdin.setRawMode!(wasRaw);
-      process.stdout.write(`${ESC}[?25h${ESC}[?7h`); // show cursor; restore autowrap
+      // Restore previous screen (fullscreen), show cursor, restore autowrap.
+      process.stdout.write(`${ESC}[?25h${ESC}[?7h` + (opts.fullscreen ? `${ESC}[?1049l` : ''));
       resolve(result);
     };
     const onData = (data: Buffer) => {
@@ -132,4 +156,17 @@ export async function overlayMenu<T>(title: string, items: OverlayItem<T>[]): Pr
     };
     stdin.on('data', onData);
   });
+}
+
+/** A centered Yes/No confirmation. */
+export async function overlayConfirm(
+  question: string,
+  opts: OverlayOptions & { defaultYes?: boolean } = {},
+): Promise<boolean> {
+  if (!process.stdin.isTTY) return opts.defaultYes ?? false;
+  const yes = { label: 'Yes', value: true };
+  const no = { label: 'No', value: false };
+  const items = opts.defaultYes ? [yes, no] : [no, yes];
+  const result = await overlayMenu(question, items, opts);
+  return result ?? false;
 }

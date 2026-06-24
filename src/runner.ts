@@ -19,7 +19,7 @@ import { setupRepo } from './git/repo.js';
 import { AutoPush, type PushStatus } from './git/autopush.js';
 import { attach, setLiveStatus } from './session.js';
 import type { BarInfo } from './tui/tmux.js';
-import { select, confirm } from './tui/prompt.js';
+import { overlayMenu, overlayConfirm } from './tui/overlay.js';
 
 function log(msg: string): void {
   process.stdout.write(`teleport: ${msg}\n`);
@@ -38,9 +38,9 @@ export async function startNew(opts: StartOptions): Promise<void> {
 
   const hasRepo = !!(repo && repo.originUrl);
   if (!hasRepo) {
-    const ok = await confirm(
-      'Not in a git repo (or no origin remote). Create a new blank sandbox with no repo?',
-      false,
+    const ok = await overlayConfirm(
+      'Not in a git repo. Create a new blank sandbox with no repo?',
+      { fullscreen: true },
     );
     if (!ok) {
       log('cancelled.');
@@ -63,10 +63,14 @@ export async function startNew(opts: StartOptions): Promise<void> {
   const sources = agent ? await discoverSources(agent) : [];
   let chosen: (typeof sources)[number] | null | undefined;
   if (sources.length > 0) {
-    chosen = await select(`Import credentials for ${opts.command}?`, [
-      ...sources.map((s) => ({ label: s.label, detail: s.detail, value: s })),
-      { label: 'Neither — start without importing', detail: '', value: null },
-    ]);
+    chosen = await overlayMenu(
+      `Import credentials for ${opts.command}?`,
+      [
+        ...sources.map((s) => ({ label: s.label, detail: s.detail, value: s })),
+        { label: 'Neither — start without importing', value: null },
+      ],
+      { fullscreen: true },
+    );
   }
 
   log(`creating sandbox on the background-agents snapshot…`);

@@ -147,7 +147,7 @@ export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<Att
   const handleMenu = async () => {
     if (menuOpen) return;
     menuOpen = true;
-    stdin.off('data', onStdin); // let select() own stdin while the menu is up
+    stdin.off('data', onStdin); // let the overlay own stdin while the menu is up
     let action: AttachOutcome | null = null;
     try {
       action = await openMenu();
