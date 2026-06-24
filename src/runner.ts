@@ -37,11 +37,9 @@ export async function startNew(opts: StartOptions): Promise<void> {
   const cwd = process.cwd();
   const repo = await inspectLocalRepo(cwd);
 
-  // Insert the agent's yolo/dangerous flag right after the command name.
-  const yoloFlag = opts.yolo ? yoloFlagFor(opts.command) : undefined;
-  if (opts.yolo && !yoloFlag) {
-    log(`warning: no permission-skip flag known for "${opts.command}"; ignoring --yolo.`);
-  }
+  // By default, insert the agent's permission-skipping flag (the sandbox is
+  // throwaway); --safe disables this. Agents with no known flag run unchanged.
+  const yoloFlag = opts.yolo !== false ? yoloFlagFor(opts.command) : undefined;
   const runCommand = [opts.command, yoloFlag, ...opts.args].filter(Boolean).join(' ');
 
   const hasRepo = !!(repo && repo.originUrl);

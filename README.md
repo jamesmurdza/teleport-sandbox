@@ -25,7 +25,7 @@ Requires Node ≥ 20.
 ## Usage
 
 ```
-teleport [--yolo] <command> [args...]  Create (or reconnect to) a sandbox and run <command>
+teleport [--safe] <command> [args...]  Create (or reconnect to) a sandbox and run <command>
 teleport                       List open sessions and reconnect to one
 teleport ls                    List open sessions (non-interactive)
 teleport stop <id>             Stop a sandbox (it can be restarted on reconnect)
@@ -35,20 +35,26 @@ teleport doctor                Preflight diagnostics
 teleport help                  Show help
 ```
 
-### Skipping permission prompts (`--yolo`)
+### Permission prompts are skipped by default
 
-Pass `--yolo` (or `--dangerous` / `-y`) before the command to append the agent's
-permission/approval-skipping flag, so it runs without prompting:
+Because every session runs in a throwaway sandbox, teleport appends the agent's
+permission/approval-skipping flag by default:
 
 ```
-teleport --yolo claude     # -> claude --dangerously-skip-permissions
-teleport --yolo codex      # -> codex --yolo
-teleport --yolo gemini     # -> gemini --yolo
+teleport claude     # -> claude --dangerously-skip-permissions
+teleport codex      # -> codex --yolo
+teleport gemini     # -> gemini --yolo
 ```
 
 Known mappings: `claude` → `--dangerously-skip-permissions`, `codex` → `--yolo`,
-`gemini` → `--yolo`, `copilot` → `--autopilot`, `kilo` → `--auto`. Other commands
-warn and run unchanged.
+`gemini` → `--yolo`, `copilot` → `--autopilot`, `kilo` → `--auto`. Agents without
+a known flag run unchanged.
+
+To keep the agent's normal prompts, pass `--safe` (alias `--no-yolo`):
+
+```
+teleport --safe claude     # -> claude   (prompts intact)
+```
 
 ### What happens on `teleport claude`
 

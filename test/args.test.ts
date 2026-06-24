@@ -6,28 +6,28 @@ test('no args -> list', () => {
   assert.deepEqual(parseArgs([]), { type: 'list' });
 });
 
-test('agent command -> run with args', () => {
+test('agent command -> run with args, yolo on by default', () => {
   assert.deepEqual(parseArgs(['claude', '--resume', 'x']), {
     type: 'run',
     command: 'claude',
     args: ['--resume', 'x'],
-    yolo: false,
+    yolo: true,
   });
 });
 
-test('--yolo before the command sets the yolo flag', () => {
-  assert.deepEqual(parseArgs(['--yolo', 'claude']), {
-    type: 'run',
-    command: 'claude',
-    args: [],
-    yolo: true,
-  });
+test('--safe / --no-yolo opt out of permission skipping', () => {
+  assert.equal((parseArgs(['--safe', 'claude']) as { yolo: boolean }).yolo, false);
+  assert.equal((parseArgs(['--no-yolo', 'codex']) as { yolo: boolean }).yolo, false);
+});
+
+test('--yolo/-y/--dangerous explicitly keep the default (skip prompts)', () => {
+  assert.equal((parseArgs(['--yolo', 'claude']) as { yolo: boolean }).yolo, true);
   assert.equal((parseArgs(['-y', 'codex', 'exec']) as { yolo: boolean }).yolo, true);
   assert.equal((parseArgs(['--dangerous', 'gemini']) as { yolo: boolean }).yolo, true);
 });
 
-test('--yolo with no command is an error', () => {
-  assert.equal(parseArgs(['--yolo']).type, 'error');
+test('a flag with no command is an error', () => {
+  assert.equal(parseArgs(['--safe']).type, 'error');
 });
 
 test('help variants', () => {

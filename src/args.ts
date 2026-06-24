@@ -25,20 +25,31 @@ export type ParseResult = Command | { type: 'error'; message: string };
 
 const RESERVED = new Set(['ls', 'stop', 'rm', 'push', 'doctor', 'help']);
 
-const YOLO_FLAGS = new Set(['--yolo', '--dangerous', '-y']);
-
 export function parseArgs(argv: string[]): ParseResult {
-  // Peel leading teleport options (currently just --yolo) before the command.
-  let yolo = false;
+  // Peel leading teleport options before the command. Permission-skipping
+  // ("yolo") is the default because every session runs in a throwaway sandbox;
+  // --safe / --no-yolo opts back into the agent's normal prompts.
+  let yolo = true;
+  let sawFlag = false;
   let i = 0;
-  while (i < argv.length && YOLO_FLAGS.has(argv[i])) {
-    yolo = true;
-    i++;
+  while (i < argv.length) {
+    const a = argv[i];
+    if (a === '--yolo' || a === '--dangerous' || a === '-y') {
+      yolo = true;
+      sawFlag = true;
+      i++;
+    } else if (a === '--no-yolo' || a === '--safe') {
+      yolo = false;
+      sawFlag = true;
+      i++;
+    } else {
+      break;
+    }
   }
   const [first, ...rest] = argv.slice(i);
 
   if (first === undefined) {
-    if (yolo) return { type: 'error', message: '--yolo requires a command, e.g. `teleport --yolo claude`.' };
+    if (sawFlag) return { type: 'error', message: 'that flag requires a command, e.g. `teleport claude`.' };
     return { type: 'list' };
   }
   if (first === '--help' || first === '-h' || first === 'help') return { type: 'help' };
@@ -66,7 +77,7 @@ export function parseArgs(argv: string[]): ParseResult {
 export const USAGE = `teleport — run an AI agent in a fresh Daytona sandbox
 
 Usage:
-  teleport [--yolo] <command> [args...]  Create (or reconnect to) a sandbox and run <command>
+  teleport [--safe] <command> [args...]  Create (or reconnect to) a sandbox and run <command>
   teleport                       List open sessions and reconnect
   teleport ls                    List open sessions (non-interactive)
   teleport stop <id>             Stop a sandbox
@@ -76,9 +87,11 @@ Usage:
   teleport help                  Show this help
 
 Options:
-  --yolo, --dangerous, -y        Skip the agent's permission/approval prompts
-                                 (e.g. claude --dangerously-skip-permissions,
-                                 codex --yolo, gemini --yolo).
+  --safe, --no-yolo              Keep the agent's permission/approval prompts.
+                                 By default teleport skips them (sandbox is
+                                 throwaway): claude --dangerously-skip-permissions,
+                                 codex --yolo, gemini --yolo, etc.
+  --yolo, --dangerous, -y        Explicitly request the default (skip prompts).
 
 Environment:
   DAYTONA_API_KEY                Required. Daytona API key.
