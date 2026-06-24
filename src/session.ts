@@ -9,7 +9,7 @@
  */
 import type { Sandbox } from '@daytonaio/sdk';
 import { TMUX_CONF_PATH, TMUX_SESSION, TMUX_STATUS_FILE } from './config.js';
-import { ensureTmux, writeFileAbs } from './sandbox-ops.js';
+import { ensureTmux, sandboxHome, writeFileAbs } from './sandbox-ops.js';
 import { tmuxConf, type BarInfo } from './tui/tmux.js';
 import { select, confirm } from './tui/prompt.js';
 
@@ -61,6 +61,9 @@ export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<Att
   const localeLang =
     process.env.LANG && /utf-?8/i.test(process.env.LANG) ? process.env.LANG : 'C.UTF-8';
   const envs: Record<string, string> = {
+    // Pin HOME to the dir we wrote credentials into, so the agent reads them
+    // from the same place even if the interactive shell would default elsewhere.
+    HOME: await sandboxHome(sandbox),
     LANG: localeLang,
     LC_ALL: localeLang,
     LC_CTYPE: localeLang,

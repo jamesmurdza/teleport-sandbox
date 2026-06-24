@@ -82,8 +82,10 @@ export async function startNew(opts: StartOptions): Promise<void> {
   // Apply credential choice now that we have a sandbox.
   let env: Record<string, string> = {};
   if (chosen) {
-    env = await applyCredential(sandbox, chosen.payload);
-    log(`imported ${opts.command} credentials.`);
+    const result = await applyCredential(sandbox, chosen.payload);
+    env = result.env;
+    log(`${opts.command} credentials: ${result.summary}`);
+    if (!result.ok) log('the agent may prompt you to log in because the credential file did not verify.');
   }
 
   // Clone repo + create teleport branch + start auto-push.

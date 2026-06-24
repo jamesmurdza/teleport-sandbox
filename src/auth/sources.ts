@@ -45,6 +45,23 @@ async function keychainSecret(service: string): Promise<string | null> {
   }
 }
 
+/** Probes a keychain item and reports why it did or didn't resolve (for doctor). */
+export async function probeKeychain(
+  service: string,
+): Promise<{ found: boolean; detail: string }> {
+  if (platform() !== 'darwin') return { found: false, detail: 'not macOS' };
+  try {
+    const { stdout } = await exec('security', ['find-generic-password', '-s', service, '-w']);
+    const v = stdout.trim();
+    return v
+      ? { found: true, detail: `found (${v.length} chars)` }
+      : { found: false, detail: 'item found but password is empty' };
+  } catch (e) {
+    const err = e as { stderr?: string; message?: string };
+    return { found: false, detail: `security: ${(err.stderr || err.message || 'error').trim()}` };
+  }
+}
+
 /** Reads a local file's contents, or null if missing/unreadable. */
 async function readIfExists(path: string): Promise<string | null> {
   try {

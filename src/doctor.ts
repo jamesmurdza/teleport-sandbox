@@ -7,7 +7,7 @@ import { BASE_SNAPSHOT, AGENTS } from './config.js';
 import { daytona } from './daytona.js';
 import { inspectLocalRepo } from './local-git.js';
 import { resolveGitHubToken } from './git/auth.js';
-import { discoverSources } from './auth/sources.js';
+import { discoverSources, probeKeychain } from './auth/sources.js';
 
 type Level = 'ok' | 'warn' | 'fail';
 
@@ -68,6 +68,15 @@ export async function runDoctor(cwd: string): Promise<number> {
           }
         : { level: 'warn', label: `${agent.name} creds`, detail: 'none detected locally' },
     );
+    // On macOS, explain the keychain result explicitly (found / denied / missing).
+    if (process.platform === 'darwin' && agent.keychainService) {
+      const probe = await probeKeychain(agent.keychainService);
+      checks.push({
+        level: probe.found ? 'ok' : 'warn',
+        label: `${agent.name} keychain`,
+        detail: `"${agent.keychainService}" — ${probe.detail}`,
+      });
+    }
   }
 
   // 4. Local git repo state.

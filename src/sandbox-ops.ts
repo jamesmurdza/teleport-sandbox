@@ -40,7 +40,7 @@ export async function writeHomeFile(
   relPath: string,
   content: string,
   mode = '600',
-): Promise<void> {
+): Promise<string> {
   const home = await sandboxHome(sandbox);
   const abs = posix.join(home, relPath);
   const dir = posix.dirname(abs);
@@ -48,7 +48,32 @@ export async function writeHomeFile(
     /* already exists */
   });
   await sandbox.fs.uploadFile(Buffer.from(content, 'utf8'), abs);
-  await sandbox.fs.setFilePermissions(abs, { mode });
+  await sandbox.fs.setFilePermissions(abs, { mode }).catch(() => {});
+  return abs;
+}
+
+/** Returns the login name of the user toolbox commands run as. */
+export async function whoami(sandbox: Sandbox): Promise<string> {
+  const res = await sandbox.process.executeCommand('id -un').catch(() => null);
+  return (res?.result ?? '').trim();
+}
+
+export interface FileStat {
+  exists: boolean;
+  size: number;
+  owner: string;
+  mode: string;
+}
+
+/** Stats a file inside the sandbox (GNU stat); exists=false if missing. */
+export async function statFile(sandbox: Sandbox, absPath: string): Promise<FileStat> {
+  const res = await sandbox.process
+    .executeCommand(`stat -c '%s %U %a' ${absPath} 2>/dev/null || echo MISSING`)
+    .catch(() => null);
+  const out = (res?.result ?? '').trim();
+  if (!out || out === 'MISSING') return { exists: false, size: 0, owner: '', mode: '' };
+  const [size, owner, mode] = out.split(/\s+/);
+  return { exists: true, size: Number(size) || 0, owner: owner ?? '', mode: mode ?? '' };
 }
 
 /** Writes a file at an absolute sandbox path, creating its parent directory. */
