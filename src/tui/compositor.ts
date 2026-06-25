@@ -28,7 +28,7 @@ import {
   encodeMouse,
   trackMouseEncoding,
   wheelDirection,
-  realTerminalMouseEnable,
+  realTerminalMouseSequences,
   realTerminalMouseDisable,
   type MouseEncoding,
   type MouseProtocol,
@@ -70,12 +70,13 @@ export class Compositor {
   private live = '';
 
   private mouseEncoding: MouseEncoding = 'default';
-  private realMouseOn = false;
+  private realMouseProtocol: MouseProtocol = 'none';
   private cursorHidden = false;
   private scrollOffset = 0;
 
   private renderTimer: NodeJS.Timeout | null = null;
   private disposed = false;
+  private paused = false;
   private readonly disposers: Array<() => void> = [];
 
   constructor(opts: CompositorOptions) {
@@ -94,9 +95,12 @@ export class Compositor {
     this.disposers.push(() => d.dispose());
   }
 
-  /** Enters the alt screen, hides the cursor, and paints the first frame. */
+  /** Enters the alt screen, hides the cursor, enables mouse, paints frame one. */
   start(): void {
     this.opts.write(`${ESC}[?1049h${ESC}[2J${ESC}[H${ESC}[?25l`);
+    // Always capture buttons + wheel so local scrollback works even for agents
+    // that never enable mouse themselves.
+    this.opts.write(realTerminalMouseSequences('none'));
     this.prevFrame = blankFrame(this.cols, this.rows - 1);
     this.renderNow();
   }
@@ -115,12 +119,12 @@ export class Compositor {
   /** Handles a stdin chunk: bridges mouse, scrolls, or forwards keystrokes. */
   input(chunk: Buffer): void {
     const s = chunk.toString('binary');
-    if (!this.realMouseOn) {
-      this.opts.sendInput(chunk);
-      return;
-    }
     const { events, rest } = extractSgrMouse(s);
-    if (rest) this.opts.sendInput(Buffer.from(rest, 'binary'));
+    if (rest) {
+      // Typing while scrolled back snaps the viewport to the live bottom.
+      if (this.scrollOffset > 0) this.follow();
+      this.opts.sendInput(Buffer.from(rest, 'binary'));
+    }
     const protocol = this.mouseProtocol();
     for (const ev of events) {
       const dir = wheelDirection(ev);
@@ -158,7 +162,7 @@ export class Compositor {
     if (this.disposed) return;
     this.disposed = true;
     if (this.renderTimer) clearTimeout(this.renderTimer);
-    if (this.realMouseOn) this.opts.write(realTerminalMouseDisable());
+    this.opts.write(realTerminalMouseDisable());
     // Show cursor, leave alt screen.
     this.opts.write(`${ESC}[?25h${ESC}[2J${ESC}[H${ESC}[?1049l`);
     for (const dispose of this.disposers) dispose();
@@ -171,12 +175,12 @@ export class Compositor {
     return (this.term.modes?.mouseTrackingMode ?? 'none') as MouseProtocol;
   }
 
-  /** Enables/disables mouse reporting on the real terminal to match the agent. */
+  /** Adjusts real-terminal mouse tracking when the agent's protocol changes. */
   private syncRealMouse(): void {
-    const want = this.mouseProtocol() !== 'none';
-    if (want === this.realMouseOn) return;
-    this.realMouseOn = want;
-    this.opts.write(want ? realTerminalMouseEnable() : realTerminalMouseDisable());
+    const protocol = this.mouseProtocol();
+    if (protocol === this.realMouseProtocol) return;
+    this.realMouseProtocol = protocol;
+    this.opts.write(realTerminalMouseSequences(protocol));
   }
 
   private trackCursorVisibility(text: string): void {
@@ -203,7 +207,7 @@ export class Compositor {
   }
 
   private renderNow(): void {
-    if (this.disposed) return;
+    if (this.disposed || this.paused) return;
     const agentRows = this.rows - 1;
     const buf = this.term.buffer.active;
     const top = viewportTop(buf.baseY, this.scrollOffset);
@@ -233,7 +237,7 @@ export class Compositor {
   /** The live-status segment, with a scrollback hint when scrolled up. */
   private statusLine(): string {
     if (this.scrollOffset > 0) {
-      const hint = `SCROLL ↑${this.scrollOffset} (press End to follow)`;
+      const hint = `SCROLLBACK ↑${this.scrollOffset} · type to resume`;
       return this.live ? `${hint}  ·  ${this.live}` : hint;
     }
     return this.live;
@@ -244,5 +248,19 @@ export class Compositor {
     if (this.scrollOffset === 0) return;
     this.scrollOffset = 0;
     this.scheduleRender();
+  }
+
+  /** Stops painting (e.g. while the menu overlay owns the screen). */
+  pause(): void {
+    this.paused = true;
+  }
+
+  /** Resumes painting and forces a full repaint to erase any overlay. */
+  resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    this.prevFrame = null;
+    this.prevBar = '';
+    this.renderNow();
   }
 }

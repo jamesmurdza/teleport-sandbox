@@ -154,16 +154,21 @@ export function trackMouseEncoding(output: string, prev: MouseEncoding): MouseEn
 }
 
 /**
- * The DECSET sequence to enable mouse reporting on the *real* terminal so we
- * receive precise SGR events. We turn on any-event tracking (1003) plus SGR
- * encoding (1006): we decode everything and filter per the agent's protocol, so
- * over-reporting on the real terminal is harmless.
+ * DECSET sequences to set up mouse reporting on the *real* terminal in SGR
+ * encoding (1006). We always capture button presses + the wheel (1000) — even
+ * when the agent itself wants no mouse — so the scroll wheel can always drive
+ * local scrollback. Motion tracking (1003) is added only when the agent asked
+ * for drag/any, to avoid flooding stdin with movement events otherwise.
+ *
+ * The cost, as with tmux's mouse mode, is that native text selection is taken
+ * over by the application while attached.
  */
-export function realTerminalMouseEnable(): string {
-  return `${ESC}[?1003h${ESC}[?1006h`;
+export function realTerminalMouseSequences(protocol: MouseProtocol): string {
+  const motion = protocol === 'drag' || protocol === 'any';
+  return `${ESC}[?1000h${ESC}[?1003${motion ? 'h' : 'l'}${ESC}[?1006h`;
 }
 
 /** The DECRST sequence to turn the real terminal's mouse reporting back off. */
 export function realTerminalMouseDisable(): string {
-  return `${ESC}[?1003l${ESC}[?1006l`;
+  return `${ESC}[?1000l${ESC}[?1002l${ESC}[?1003l${ESC}[?1006l`;
 }

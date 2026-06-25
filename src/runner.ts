@@ -21,8 +21,8 @@ import { join } from 'node:path';
 import { resolveGitHubToken } from './git/auth.js';
 import { setupRepo } from './git/repo.js';
 import { AutoPush, type PushStatus } from './git/autopush.js';
-import { attach, setLiveStatus, type AttachOutcome } from './session.js';
-import type { BarInfo } from './tui/tmux.js';
+import { attach, statusBridge, type AttachOutcome, type StatusBridge } from './session.js';
+import type { BarInfo } from './tui/statusbar.js';
 import { overlayMenu, overlayConfirm } from './tui/overlay.js';
 
 function log(msg: string): void {
@@ -113,6 +113,7 @@ export async function startNew(opts: StartOptions): Promise<AttachOutcome> {
   // Clone repo + create teleport branch + start auto-push.
   let cwdInSandbox: string | undefined;
   let autopush: AutoPush | undefined;
+  const status = statusBridge();
   const bar: BarInfo = {
     shortId: sandbox.id.slice(0, 8),
     agent: opts.command,
@@ -139,7 +140,7 @@ export async function startNew(opts: StartOptions): Promise<AttachOutcome> {
           repoPath: setup.repoPath,
           branch: setup.branch,
           creds,
-          onStatus: (s, d) => void setLiveStatus(sandbox, pushLabel(s, d)),
+          onStatus: (s, d) => status.update(pushLabel(s, d)),
         });
         autopush.start();
       }
@@ -157,7 +158,7 @@ export async function startNew(opts: StartOptions): Promise<AttachOutcome> {
     });
   }
 
-  return runInteractive(sandbox, runCommand, cwdInSandbox, env, bar, autopush);
+  return runInteractive(sandbox, runCommand, cwdInSandbox, env, bar, status, autopush);
 }
 
 /**
@@ -226,6 +227,7 @@ export async function reconnect(session: Session): Promise<AttachOutcome> {
   }
 
   let autopush: AutoPush | undefined;
+  const status = statusBridge();
   const cwdInSandbox = session.repo ? SANDBOX_REPO_PATH : undefined;
   if (session.repo && session.branch) {
     const creds = await resolveGitHubToken();
@@ -234,13 +236,13 @@ export async function reconnect(session: Session): Promise<AttachOutcome> {
         repoPath: SANDBOX_REPO_PATH,
         branch: session.branch,
         creds,
-        onStatus: (s, d) => void setLiveStatus(session.sandbox, pushLabel(s, d)),
+        onStatus: (s, d) => status.update(pushLabel(s, d)),
       });
       autopush.start();
     }
   }
 
-  return runInteractive(session.sandbox, session.command, cwdInSandbox, env, bar, autopush);
+  return runInteractive(session.sandbox, session.command, cwdInSandbox, env, bar, status, autopush);
 }
 
 async function runInteractive(
@@ -249,9 +251,10 @@ async function runInteractive(
   cwd: string | undefined,
   env: Record<string, string>,
   bar: BarInfo,
+  status: StatusBridge,
   autopush?: AutoPush,
 ): Promise<AttachOutcome> {
-  const outcome = await attach(sandbox, { command, cwd, env, bar });
+  const outcome = await attach(sandbox, { command, cwd, env, bar, bindStatus: status.bind });
   autopush?.stop();
   switch (outcome) {
     case 'switch':

@@ -1,7 +1,7 @@
 /**
  * Convenience operations performed *inside* a running sandbox: resolving the
- * home directory, writing files with restrictive permissions, running commands,
- * and ensuring tmux is installed.
+ * home directory, writing files with restrictive permissions, and running
+ * commands.
  */
 import type { Sandbox } from '@daytonaio/sdk';
 import { posix } from 'node:path';
@@ -74,31 +74,4 @@ export async function statFile(sandbox: Sandbox, absPath: string): Promise<FileS
   if (!out || out === 'MISSING') return { exists: false, size: 0, owner: '', mode: '' };
   const [size, owner, mode] = out.split(/\s+/);
   return { exists: true, size: Number(size) || 0, owner: owner ?? '', mode: mode ?? '' };
-}
-
-/** Writes a file at an absolute sandbox path, creating its parent directory. */
-export async function writeFileAbs(
-  sandbox: Sandbox,
-  absPath: string,
-  content: string,
-  mode = '644',
-): Promise<void> {
-  const dir = posix.dirname(absPath);
-  await sandbox.fs.createFolder(dir, '755').catch(() => {
-    /* already exists */
-  });
-  await sandbox.fs.uploadFile(Buffer.from(content, 'utf8'), absPath);
-  await sandbox.fs.setFilePermissions(absPath, { mode }).catch(() => {});
-}
-
-/** Ensures `tmux` is installed in the sandbox (it draws the status bar). */
-export async function ensureTmux(sandbox: Sandbox): Promise<void> {
-  const check = await sandbox.process.executeCommand('command -v tmux || true');
-  if ((check.result ?? '').trim()) return;
-  // Install non-interactively; works on the Debian-based background-agents image.
-  await run(
-    sandbox,
-    'sudo apt-get update -qq && sudo apt-get install -y -qq tmux',
-    { timeout: 180 },
-  );
 }

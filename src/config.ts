@@ -16,12 +16,13 @@ export const SANDBOX_PREFIX = process.env.TELEPORT_PREFIX ?? 'teleport';
 /** Absolute path inside the sandbox where the repo is cloned. */
 export const SANDBOX_REPO_PATH = '/home/daytona/repo';
 
-/** tmux session name that persists the agent across reconnects. */
-export const TMUX_SESSION = 'teleport';
-/** Path to the generated tmux config inside the sandbox. */
-export const TMUX_CONF_PATH = '/tmp/teleport.tmux';
-/** File the tmux status line reads for live (push) status. */
-export const TMUX_STATUS_FILE = '/tmp/teleport-status';
+/**
+ * Stable id of the persistent Daytona PTY session that runs the agent. Reusing a
+ * fixed id per sandbox is what lets teleport reconnect to the *same* running
+ * agent after a detach — Daytona keeps the PTY process alive server-side, so no
+ * in-sandbox multiplexer (tmux) is needed for persistence.
+ */
+export const PTY_SESSION_ID = 'teleport-agent';
 
 /** Labels used to tag and rediscover teleport sandboxes. */
 export const LABELS = {
