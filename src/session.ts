@@ -309,9 +309,18 @@ export class TeleportSession {
     this.pendingOutcome = null;
     this.stdin.off('data', this.onStdin);
     process.stdout.off('resize', this.onResize);
-    this.compositor?.stop();
-    if (this.stdin.setRawMode) this.stdin.setRawMode(this.wasRaw);
+    this.compositor?.stop(); // disables mouse + leaves the alt screen
+    // Drain any buffered input (mouse reports / type-ahead) while still in raw
+    // mode, so it isn't handed to the shell as stray "command" characters.
     this.stdin.pause();
+    try {
+      while (this.stdin.read() !== null) {
+        /* discard */
+      }
+    } catch {
+      /* not all streams support read() — best effort */
+    }
+    if (this.stdin.setRawMode) this.stdin.setRawMode(this.wasRaw);
   }
 
   // --- internals ------------------------------------------------------------

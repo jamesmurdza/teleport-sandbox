@@ -97,7 +97,8 @@ async function dispatch(cmd: Command): Promise<number> {
  * we must still run it — otherwise the user is left with a corrupted terminal
  * (stuck in alt-screen with mouse escapes leaking, as `^[[<64;…M`).
  */
-const TERM_RESET = '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l';
+const TERM_RESET =
+  '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1004l\x1b[?7h\x1b[?25h\x1b[?1049l';
 
 function restoreTerminal(): void {
   try {

@@ -462,9 +462,12 @@ export class Compositor {
     if (this.disposed) return;
     this.disposed = true;
     if (this.renderTimer) clearTimeout(this.renderTimer);
+    // Turn off mouse reporting first so the terminal stops emitting events, then
+    // restore autowrap + cursor + bracketed paste/focus, and leave the alt
+    // screen. (Leftover input is drained by the caller so it can't leak to the
+    // shell as stray "command" characters.)
     this.opts.write(realTerminalMouseDisable());
-    // Restore autowrap, show cursor, leave alt screen.
-    this.opts.write(`${ESC}[?7h${ESC}[?25h${ESC}[2J${ESC}[H${ESC}[?1049l`);
+    this.opts.write(`${ESC}[?2004l${ESC}[?1004l${ESC}[?7h${ESC}[?25h${ESC}[2J${ESC}[H${ESC}[?1049l`);
     for (const dispose of this.disposers) dispose();
     this.term.dispose();
   }
