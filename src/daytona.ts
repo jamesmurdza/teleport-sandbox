@@ -12,6 +12,8 @@ export type { Sandbox };
 export const RUNNING_STATES = new Set(['started']);
 /** States from which a sandbox can be started again. */
 export const STARTABLE_STATES = new Set(['stopped', 'archived']);
+/** Sandboxes that are gone or being torn down — hidden from the live sidebar. */
+export const DEAD_STATES = new Set(['destroying', 'destroyed', 'error']);
 
 let client: Daytona | null = null;
 

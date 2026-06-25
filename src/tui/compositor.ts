@@ -265,10 +265,22 @@ export class Compositor {
     this.reflow();
   }
 
-  /** Updates the list of sandboxes shown in the sidebar. */
+  /**
+   * Updates the list of sandboxes shown in the sidebar, keeping the highlight on
+   * the *same sandbox* (by id) across refreshes, reorders, and deletions. When
+   * the selected sandbox is gone (e.g. just deleted), the cursor stays in the
+   * same slot — landing on the neighbour — rather than jumping elsewhere.
+   */
   setSandboxes(items: SidebarItem[]): void {
+    const prevId = this.sidebarItems[this.sidebarSelected]?.id;
     this.sidebarItems = items;
-    if (this.sidebarSelected >= items.length) this.sidebarSelected = Math.max(0, items.length - 1);
+    let idx = prevId ? items.findIndex((it) => it.id === prevId) : -1;
+    if (idx < 0) idx = Math.min(this.sidebarSelected, items.length - 1);
+    this.sidebarSelected = Math.max(0, idx);
+    // Drop a pending delete whose target vanished from the list.
+    if (this.pendingDelete && !items.some((it) => it.id === this.pendingDelete?.id)) {
+      this.pendingDelete = null;
+    }
     if (this.sidebarOpen) this.scheduleRender();
   }
 

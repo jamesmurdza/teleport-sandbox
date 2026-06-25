@@ -10,6 +10,7 @@ import {
   getSession,
   listSessions,
   tagBranch,
+  DEAD_STATES,
   type Session,
 } from './daytona.js';
 import { inspectLocalRepo } from './local-git.js';
@@ -43,15 +44,19 @@ export interface SwitchRef {
   id?: string;
 }
 
-/** Returns the live sandbox list as sidebar items, marking the attached one. */
+/** Returns the live sandbox list as sidebar items, marking the attached one.
+ * Sandboxes being torn down (or errored) are dropped so a just-deleted one
+ * disappears from the sidebar immediately instead of lingering. */
 async function listSandboxItems(currentId: string): Promise<SidebarItem[]> {
   const sessions = await listSessions();
-  return sessions.map((s) => ({
-    id: s.id,
-    agent: s.command || s.agent || '?',
-    state: s.state || '?',
-    current: s.id === currentId,
-  }));
+  return sessions
+    .filter((s) => s.id === currentId || !DEAD_STATES.has(s.state))
+    .map((s) => ({
+      id: s.id,
+      agent: s.command || s.agent || '?',
+      state: s.state || '?',
+      current: s.id === currentId,
+    }));
 }
 
 /** Full flow for `teleport <command>`. */

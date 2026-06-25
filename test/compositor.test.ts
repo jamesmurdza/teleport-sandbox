@@ -133,6 +133,41 @@ test('delete asks for confirmation; y confirms, anything else cancels', () => {
   c.stop();
 });
 
+// Presses `d` and waits for the coalesced render, returning the painted output.
+async function footerAfterDelete(c: Compositor, writes: string[]): Promise<string> {
+  writes.length = 0;
+  c.input(Buffer.from('d'));
+  for (let i = 0; i < 50 && !writes.join('').includes('delete '); i++) {
+    await new Promise((res) => setTimeout(res, 10));
+  }
+  return writes.join('');
+}
+
+test('selection follows the same sandbox by id when the list reorders', async () => {
+  const { c, writes } = harness(12, 80);
+  c.start();
+  c.setSandboxes(sandboxes); // [aaaa(cur), bbbb, cccc]
+  c.input(Buffer.from('\x1d'));
+  c.input(Buffer.from('\x1b[B')); // select bbbb2222
+  c.setSandboxes([sandboxes[2], sandboxes[1], sandboxes[0]]); // reorder
+  const out = await footerAfterDelete(c, writes);
+  assert.ok(out.includes('delete bbbb2222?'), 'still on bbbb2222 after reorder');
+  c.stop();
+});
+
+test('deleting the selected sandbox keeps the cursor on the neighbour', async () => {
+  const { c, writes } = harness(12, 80);
+  c.start();
+  c.setSandboxes(sandboxes); // [aaaa(cur), bbbb, cccc]
+  c.input(Buffer.from('\x1d'));
+  c.input(Buffer.from('\x1b[B')); // select bbbb2222 (index 1)
+  // Simulate the post-delete refresh: bbbb is gone.
+  c.setSandboxes([sandboxes[0], sandboxes[2]]); // [aaaa(cur), cccc]
+  const out = await footerAfterDelete(c, writes);
+  assert.ok(out.includes('delete cccc3333?'), 'cursor moved to the neighbour, not the current sandbox');
+  c.stop();
+});
+
 test('keystrokes are NOT forwarded to the agent while the sidebar is open', () => {
   const { c, toPty } = harness(10, 80);
   c.start();
