@@ -64,19 +64,19 @@ export interface CompositorOptions {
   onAgentSize?: (cols: number, rows: number) => void;
   /** Called when a sidebar row is activated to switch to it (Enter / click). */
   onSidebarSelect?: (item: SidebarItem, index: number) => void;
-  /** Detaches and exits the current session. */
+  /** Detaches and exits the current session (the `x` action). */
   onSessionAction?: (outcome: 'detached') => void;
   /**
-   * Stops/deletes the *current* sandbox. `neighbour` is another sandbox to hand
-   * off to so the session (and sidebar) can continue, or null if none exists.
+   * Deletes the *current* sandbox. `neighbour` is another sandbox to hand off to
+   * so the session (and sidebar) can continue, or null if none exists.
    */
-  onCurrentAction?: (kind: 'stop' | 'delete', current: SidebarItem, neighbour: SidebarItem | null) => void;
-  /** Performs an action on another (un-attached) sandbox, then the list refreshes. */
-  onInlineAction?: (kind: 'stop' | 'delete', item: SidebarItem) => void;
+  onDeleteCurrent?: (current: SidebarItem, neighbour: SidebarItem | null) => void;
+  /** Deletes another (un-attached) sandbox in place, then the list refreshes. */
+  onDeleteOther?: (item: SidebarItem) => void;
 }
 
 /** Keybinding legend shown in the sidebar footer. */
-const SIDEBAR_LEGEND = '↵ open  s stop  d del  x exit';
+const SIDEBAR_LEGEND = '↵ open  d del  x exit';
 
 /** Clamps a scrollback offset to [0, max]. */
 export function clampScroll(offset: number, max: number): number {
@@ -209,8 +209,7 @@ export class Compositor {
       else this.cancelDelete();
       return;
     }
-    // Action keys act on the selected sandbox.
-    if (s === 's') return this.stopSelected();
+    // Action keys.
     if (s === 'd') return this.askDelete();
     if (s === 'x' || s === 'X') return void this.opts.onSessionAction?.('detached');
     switch (decodeKey(buf)) {
@@ -231,22 +230,6 @@ export class Compositor {
     }
   }
 
-  /** Stops the selected sandbox. Stopping the current one hands off to a
-   * neighbour (so the flow continues); others stop in place. */
-  private stopSelected(): void {
-    const it = this.sidebarItems[this.sidebarSelected];
-    if (!it) return;
-    if (it.current) this.actOnCurrent('stop', it);
-    else this.opts.onInlineAction?.('stop', it);
-  }
-
-  /** Routes a stop/delete of the *current* sandbox, picking a neighbour to hand
-   * off to so deleting/stopping it doesn't tear down the sidebar flow. */
-  private actOnCurrent(kind: 'stop' | 'delete', it: SidebarItem): void {
-    const neighbour = this.sidebarItems.find((s) => !s.current) ?? null;
-    this.opts.onCurrentAction?.(kind, it, neighbour);
-  }
-
   private askDelete(): void {
     const it = this.sidebarItems[this.sidebarSelected];
     if (!it) return;
@@ -258,8 +241,13 @@ export class Compositor {
     const it = this.pendingDelete;
     this.pendingDelete = null;
     if (it) {
-      if (it.current) this.actOnCurrent('delete', it);
-      else this.opts.onInlineAction?.('delete', it);
+      if (it.current) {
+        // Hand off to a neighbour so deleting the current one keeps the flow.
+        const neighbour = this.sidebarItems.find((s) => !s.current) ?? null;
+        this.opts.onDeleteCurrent?.(it, neighbour);
+      } else {
+        this.opts.onDeleteOther?.(it);
+      }
     }
     this.scheduleRender();
   }

@@ -13,6 +13,13 @@ export const BASE_SNAPSHOT = process.env.TELEPORT_SNAPSHOT ?? 'background-agents
 /** Prefix applied to the name of every sandbox teleport creates. */
 export const SANDBOX_PREFIX = process.env.TELEPORT_PREFIX ?? 'teleport';
 
+/**
+ * Minutes of inactivity after which a sandbox auto-stops (0 disables). Sandboxes
+ * restart on reconnect, so idle ones don't sit running. Override with
+ * TELEPORT_AUTOSTOP.
+ */
+export const AUTOSTOP_MINUTES = Number(process.env.TELEPORT_AUTOSTOP ?? 30) || 0;
+
 /** Absolute path inside the sandbox where the repo is cloned. */
 export const SANDBOX_REPO_PATH = '/home/daytona/repo';
 

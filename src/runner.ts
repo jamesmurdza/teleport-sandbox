@@ -316,9 +316,6 @@ async function prepareExisting(session: Session, openSidebar: boolean): Promise<
 async function runSessionLoop(first: Prepared): Promise<void> {
   const deps: SessionDeps = {
     switchTarget: {},
-    stopSandbox: async (id) => {
-      await (await getSession(id)).sandbox.stop();
-    },
     deleteSandbox: async (id) => {
       await (await getSession(id)).sandbox.delete();
     },
@@ -347,10 +344,7 @@ async function runSessionLoop(first: Prepared): Promise<void> {
       }
 
       const sandbox = prep.spec.sandbox;
-      if (outcome === 'stopped') {
-        await sandbox.stop().catch((e) => (endMsg = `failed to stop: ${msgOf(e)}`));
-        endMsg ||= `stopped ${sandbox.id}. Reconnect with \`teleport\` to restart it.`;
-      } else if (outcome === 'deleted') {
+      if (outcome === 'deleted') {
         await sandbox.delete().catch((e) => (endMsg = `failed to delete: ${msgOf(e)}`));
         endMsg ||= `deleted ${sandbox.id}.`;
       } else if (outcome === 'detached') {

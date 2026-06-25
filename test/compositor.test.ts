@@ -23,7 +23,7 @@ function harness(rows = 6, cols = 20) {
   const selected: Array<{ id: string; index: number }> = [];
   const sessionActions: string[] = [];
   const inlineActions: Array<{ kind: string; id: string }> = [];
-  const currentActions: Array<{ kind: string; id: string; neighbour: string | null }> = [];
+  const deleteCurrent: Array<{ id: string; neighbour: string | null }> = [];
   const c = new Compositor({
     cols,
     rows,
@@ -33,10 +33,10 @@ function harness(rows = 6, cols = 20) {
     onAgentSize: (co, ro) => sizes.push([co, ro]),
     onSidebarSelect: (it, index) => selected.push({ id: it.id, index }),
     onSessionAction: (a) => sessionActions.push(a),
-    onCurrentAction: (kind, cur, nb) => currentActions.push({ kind, id: cur.id, neighbour: nb?.id ?? null }),
-    onInlineAction: (kind, it) => inlineActions.push({ kind, id: it.id }),
+    onDeleteCurrent: (cur, nb) => deleteCurrent.push({ id: cur.id, neighbour: nb?.id ?? null }),
+    onDeleteOther: (it) => inlineActions.push({ kind: 'delete', id: it.id }),
   });
-  return { c, writes, toPty, sizes, selected, sessionActions, currentActions, inlineActions, out: () => writes.join('') };
+  return { c, writes, toPty, sizes, selected, sessionActions, deleteCurrent, inlineActions, out: () => writes.join('') };
 }
 
 const sandboxes = [
@@ -99,44 +99,36 @@ test('open sidebar captures arrows and Enter activates the selection', () => {
   c.stop();
 });
 
-test('sidebar action keys: x detaches, s/d act on current vs other sandbox', () => {
-  const { c, sessionActions, currentActions, inlineActions } = harness(12, 80);
+test('x detaches the session', () => {
+  const { c, sessionActions } = harness(12, 80);
   c.start();
   c.setSandboxes(sandboxes); // index 0 is current
   c.input(Buffer.from('\x1d')); // open (selection starts on current = 0)
-
   c.input(Buffer.from('x')); // detach the whole session
   assert.deepEqual(sessionActions, ['detached']);
-
-  c.input(Buffer.from('s')); // stop the current sandbox → hand off to a neighbour
-  assert.deepEqual(currentActions, [{ kind: 'stop', id: 'aaaa1111', neighbour: 'bbbb2222' }]);
-
-  c.input(Buffer.from('\x1b[B')); // down to another sandbox (index 1)
-  c.input(Buffer.from('s')); // stop another → inline, stays attached
-  assert.deepEqual(inlineActions, [{ kind: 'stop', id: 'bbbb2222' }]);
   c.stop();
 });
 
 test('deleting the current sandbox hands off to a neighbour (keeps the flow)', () => {
-  const { c, currentActions, sessionActions } = harness(12, 80);
+  const { c, deleteCurrent, sessionActions } = harness(12, 80);
   c.start();
   c.setSandboxes(sandboxes); // current = aaaa1111, others present
   c.input(Buffer.from('\x1d')); // open, selection on current
   c.input(Buffer.from('d')); // ask
   c.input(Buffer.from('y')); // confirm
-  assert.deepEqual(currentActions, [{ kind: 'delete', id: 'aaaa1111', neighbour: 'bbbb2222' }]);
+  assert.deepEqual(deleteCurrent, [{ id: 'aaaa1111', neighbour: 'bbbb2222' }]);
   assert.deepEqual(sessionActions, [], 'no abrupt session-ending action');
   c.stop();
 });
 
 test('deleting the current sandbox with no other sandbox ends the session', () => {
-  const { c, currentActions, sessionActions } = harness(12, 80);
+  const { c, deleteCurrent } = harness(12, 80);
   c.start();
   c.setSandboxes([sandboxes[0]]); // only the current sandbox
   c.input(Buffer.from('\x1d'));
   c.input(Buffer.from('d'));
   c.input(Buffer.from('y'));
-  assert.deepEqual(currentActions, [{ kind: 'delete', id: 'aaaa1111', neighbour: null }]);
+  assert.deepEqual(deleteCurrent, [{ id: 'aaaa1111', neighbour: null }]);
   c.stop();
 });
 

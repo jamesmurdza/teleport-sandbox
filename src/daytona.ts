@@ -3,7 +3,7 @@
  * talks to Daytona through this module, so SDK-specific details stay in one place.
  */
 import { Daytona, type Sandbox } from '@daytonaio/sdk';
-import { BASE_SNAPSHOT, LABELS, SANDBOX_PREFIX } from './config.js';
+import { AUTOSTOP_MINUTES, BASE_SNAPSHOT, LABELS, SANDBOX_PREFIX } from './config.js';
 import { sandboxName } from './naming.js';
 
 export type { Sandbox };
@@ -69,7 +69,7 @@ export async function createSandbox(params: CreateSessionParams): Promise<Sandbo
   const name = sandboxName(SANDBOX_PREFIX, slug, suffix);
 
   const sandbox = await daytona().create(
-    { name, snapshot: BASE_SNAPSHOT, labels, autoStopInterval: 30 },
+    { name, snapshot: BASE_SNAPSHOT, labels, autoStopInterval: AUTOSTOP_MINUTES },
     { timeout: 180 },
   );
   return sandbox;

@@ -51,17 +51,15 @@ export interface AttachSpec {
 export interface SessionDeps {
   /** Written by the sidebar when the user picks a different sandbox to switch to. */
   switchTarget: { id?: string; openSidebar?: boolean };
-  /** Stops a sandbox by id (sidebar `s` on another sandbox). */
-  stopSandbox: (id: string) => Promise<void>;
-  /** Deletes a sandbox by id (sidebar `d` on another sandbox). */
+  /** Deletes a sandbox by id (sidebar `d`). */
   deleteSandbox: (id: string) => Promise<void>;
 }
 
 /**
  * How an attach ended. 'switch'/'detached'/'ended' leave the sandbox running;
- * 'stopped' and 'deleted' tell the caller to stop or delete the sandbox.
+ * 'deleted' tells the caller to delete the sandbox.
  */
-export type AttachOutcome = 'switch' | 'detached' | 'ended' | 'stopped' | 'deleted';
+export type AttachOutcome = 'switch' | 'detached' | 'ended' | 'deleted';
 
 type Pty = Awaited<ReturnType<Sandbox['process']['createPty']>>;
 
@@ -259,8 +257,8 @@ export class TeleportSession {
       onAgentSize: (c, r) => void this.currentPty?.resize(c, r).catch(() => {}),
       onSidebarSelect: (item) => this.onSelect(item),
       onSessionAction: (action) => this.settle?.(action),
-      onCurrentAction: (kind, current, neighbour) => this.onCurrentAction(kind, current, neighbour),
-      onInlineAction: (kind, item) => this.inlineAction(kind, item.id),
+      onDeleteCurrent: (current, neighbour) => this.onDeleteCurrent(current, neighbour),
+      onDeleteOther: (item) => this.onDeleteOther(item.id),
     });
     return this.compositor;
   }
@@ -307,28 +305,27 @@ export class TeleportSession {
     this.settle?.('switch');
   }
 
-  // Stopping/deleting the *current* sandbox hands off to a neighbour so the flow
-  // continues; only with no neighbour does it end the session.
-  private onCurrentAction(kind: 'stop' | 'delete', current: SidebarItem, neighbour: SidebarItem | null): void {
+  // Deleting the *current* sandbox hands off to a neighbour so the flow
+  // continues; with no neighbour it ends the session ('deleted').
+  private onDeleteCurrent(current: SidebarItem, neighbour: SidebarItem | null): void {
     if (!neighbour) {
-      this.settle?.(kind === 'stop' ? 'stopped' : 'deleted');
+      this.settle?.('deleted');
       return;
     }
-    const op = kind === 'stop' ? this.deps.stopSandbox : this.deps.deleteSandbox;
-    void op(current.id).catch(() => {});
+    void this.deps.deleteSandbox(current.id).catch(() => {});
     this.deps.switchTarget.id = neighbour.id;
     this.deps.switchTarget.openSidebar = true;
     this.settle?.('switch');
   }
 
-  // Stop/delete of another sandbox happens in place; errors surface in the bar.
-  private inlineAction(kind: 'stop' | 'delete', id: string): void {
+  // Deleting another sandbox happens in place; errors surface in the bar.
+  private onDeleteOther(id: string): void {
     void (async () => {
       try {
-        await (kind === 'stop' ? this.deps.stopSandbox : this.deps.deleteSandbox)(id);
+        await this.deps.deleteSandbox(id);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        this.compositor?.setLiveStatus(`✗ ${kind} failed: ${msg.replace(/^"|"$/g, '')}`);
+        this.compositor?.setLiveStatus(`✗ delete failed: ${msg.replace(/^"|"$/g, '')}`);
       }
       await this.refresh();
     })();
