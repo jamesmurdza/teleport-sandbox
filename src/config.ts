@@ -64,6 +64,8 @@ export interface AgentDef {
    * holds the account + onboarding state). Skipped for API-key (env) imports.
    */
   companionFiles?: { local: string; sandbox: string }[];
+  /** Static environment variables injected into the agent's session. */
+  env?: Record<string, string>;
 }
 
 export const AGENTS: Record<string, AgentDef> = {
@@ -77,6 +79,8 @@ export const AGENTS: Record<string, AgentDef> = {
     // ~/.claude.json holds the account + onboarding state; without it Claude
     // re-runs onboarding and ignores the imported token.
     companionFiles: [{ local: '.claude.json', sandbox: '.claude.json' }],
+    // Start Claude in fullscreen (no-flicker) mode.
+    env: { CLAUDE_CODE_NO_FLICKER: '1' },
   },
   codex: {
     name: 'codex',

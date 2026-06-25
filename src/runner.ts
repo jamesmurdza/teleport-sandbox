@@ -97,11 +97,12 @@ export async function startNew(opts: StartOptions): Promise<void> {
   log(`sandbox ${sandbox.id} created; starting…`);
   await ensureStarted(sandbox);
 
-  // Apply credential choice now that we have a sandbox.
-  let env: Record<string, string> = {};
+  // Apply credential choice now that we have a sandbox. Start from the agent's
+  // static env (e.g. CLAUDE_CODE_NO_FLICKER) and layer credential env on top.
+  let env: Record<string, string> = { ...(agent?.env ?? {}) };
   if (chosen) {
     const result = await applyCredential(sandbox, chosen.payload);
-    env = result.env;
+    env = { ...env, ...result.env };
     log(`${opts.command} credentials: ${result.summary}`);
     if (!result.ok) log('the agent may prompt you to log in because the credential file did not verify.');
   }
@@ -193,9 +194,10 @@ export async function reconnect(session: Session): Promise<void> {
     branch: session.branch || undefined,
   };
 
-  // Best-effort re-inject env-var credentials (files already persist on disk).
-  let env: Record<string, string> = {};
+  // Agent static env (e.g. CLAUDE_CODE_NO_FLICKER) + best-effort re-inject of
+  // env-var credentials (credential files already persist on disk).
   const agent = knownAgent(session.agent || session.command);
+  const env: Record<string, string> = { ...(agent?.env ?? {}) };
   if (agent) {
     const sources = await discoverSources(agent);
     const envSource = sources.find((s) => s.payload.env);
