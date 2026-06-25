@@ -177,6 +177,12 @@ export class TeleportSession {
   private previewTimer: ReturnType<typeof setTimeout> | null = null;
   /** Resolver for the in-flight attach; sidebar callbacks call it. */
   private settle: ((o: AttachOutcome) => void) | null = null;
+  /**
+   * An action requested while no wait was active (e.g. `n` during the async
+   * "creating…" window). Replayed when the next wait starts so the keypress isn't
+   * silently lost.
+   */
+  private pendingOutcome: AttachOutcome | null = null;
   private readonly stdin = process.stdin;
   private wasRaw = false;
 
@@ -300,6 +306,7 @@ export class TeleportSession {
     this.refreshTimer = null;
     if (this.previewTimer) clearTimeout(this.previewTimer);
     this.previewTimer = null;
+    this.pendingOutcome = null;
     this.stdin.off('data', this.onStdin);
     process.stdout.off('resize', this.onResize);
     this.compositor?.stop();
@@ -336,8 +343,8 @@ export class TeleportSession {
       onAgentSize: (c, r) => void this.currentPty?.resize(c, r).catch(() => {}),
       onSidebarSelect: (item) => this.onSelect(item),
       onSelectionChange: (item) => this.onSelectionChange(item),
-      onSessionAction: (action) => this.settle?.(action),
-      onNew: () => this.settle?.('new'),
+      onSessionAction: (action) => this.requestOutcome(action),
+      onNew: () => this.requestOutcome('new'),
       onInfo: (item) => this.showInfo(item),
       onOpenBranch: (item) => this.openBranch(item),
       onDeleteCurrent: (current, neighbour) => this.onDeleteCurrent(current, neighbour),
@@ -378,6 +385,16 @@ export class TeleportSession {
     }
   }
 
+  /**
+   * Requests an outcome from a sidebar action. If a wait is active it resolves
+   * immediately; otherwise (a transient async window like "creating…") it is
+   * queued and replayed when the next wait starts, so the action isn't lost.
+   */
+  private requestOutcome(o: AttachOutcome): void {
+    if (this.settle) this.settle(o);
+    else this.pendingOutcome = o;
+  }
+
   /** Resolves on the first of: agent exit (if a PTY), or a sidebar action. */
   private async waitOutcome(pty: Pty | null): Promise<AttachOutcome> {
     // Cancel any pending preview from the previous state.
@@ -392,6 +409,13 @@ export class TeleportSession {
           resolve(o);
         };
         this.settle = settle; // sidebar callbacks resolve this wait
+        // Replay an action queued while no wait was active.
+        if (this.pendingOutcome) {
+          const o = this.pendingOutcome;
+          this.pendingOutcome = null;
+          settle(o);
+          return;
+        }
         pty
           ?.wait()
           .then(() => settle('ended'))
@@ -444,7 +468,7 @@ export class TeleportSession {
     this.deps.switchTarget.id = item.id;
     this.deps.switchTarget.openSidebar = opts.openSidebar;
     this.deps.switchTarget.start = opts.start;
-    this.settle?.('switch');
+    this.requestOutcome('switch');
   }
 
   /** Shows a read-only info panel for the selected sandbox in the agent pane. */
@@ -475,13 +499,13 @@ export class TeleportSession {
   // continues; with no neighbour it ends the session ('deleted').
   private onDeleteCurrent(current: SidebarItem, neighbour: SidebarItem | null): void {
     if (!neighbour) {
-      this.settle?.('deleted');
+      this.requestOutcome('deleted');
       return;
     }
     void this.deps.deleteSandbox(current.id).catch(() => {});
     this.deps.switchTarget.id = neighbour.id;
     this.deps.switchTarget.openSidebar = true;
-    this.settle?.('switch');
+    this.requestOutcome('switch');
   }
 
   // Deleting another sandbox happens in place; errors surface in the bar.
