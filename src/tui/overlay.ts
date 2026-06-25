@@ -120,7 +120,11 @@ export async function overlayMenu<T>(
     lines.push(BOX.v + `${ESC}[2m` + padTo(` ${hint}`, g.innerWidth) + `${ESC}[0m` + BOX.v);
     lines.push(BOX.bl + BOX.h.repeat(g.innerWidth) + BOX.br);
 
-    let out = `${ESC}7`; // save cursor
+    // In fullscreen mode the box can change size/position between redraws (e.g.
+    // after deleting a session it shrinks and re-centers). Clear the whole
+    // screen first so the previous, larger box leaves no border artifacts.
+    let out = opts.fullscreen ? `${ESC}[2J` : '';
+    out += `${ESC}7`; // save cursor
     lines.forEach((l, i) => {
       out += at(g.startRow + i, g.startCol) + l;
     });
