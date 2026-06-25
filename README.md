@@ -47,8 +47,9 @@ teleport gemini     # -> gemini --yolo
 ```
 
 Known mappings: `claude` → `--dangerously-skip-permissions`, `codex` → `--yolo`,
-`gemini` → `--yolo`, `copilot` → `--autopilot`, `kilo` → `--auto`. Agents without
-a known flag run unchanged.
+`gemini` → `--yolo`, `copilot` → `--autopilot`, `kilo` → `--auto`. The other
+preinstalled agents — `opencode`, `goose`, `kimi`, `pi` — auto-approve in
+interactive mode (or have no skip flag) and run unchanged.
 
 To keep the agent's normal prompts, pass `--safe` (alias `--no-yolo`):
 
@@ -61,10 +62,12 @@ teleport --safe claude     # -> claude   (prompts intact)
 1. **Repo detection.** If you're in a git repo with an `origin` remote, teleport
    clones your **current branch** into the sandbox. If you're not, it asks for
    confirmation before creating a blank sandbox.
-2. **Credential modal.** For known agents (`claude`, `codex`, `opencode`) it finds
-   available credential sources — an API-key env var, the macOS keychain, or a
-   local credential file — and asks which to import (or none). If both an env var
-   and keychain entry exist, you get all three choices.
+2. **Credential modal.** For known agents (`claude`, `codex`, `gemini`, `copilot`,
+   `opencode`, `kimi`, `kilo`, `goose`, `pi` — all preinstalled in the sandbox
+   image) it finds available credential sources — an API-key env var (e.g.
+   `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `COPILOT_GITHUB_TOKEN`,
+   `KIMI_API_KEY`), the macOS keychain, or a local credential file — and asks
+   which to import (or none). Only sources that actually exist locally are offered.
 3. **Working branch.** teleport never commits on your base branch. It checks out a
    unique branch `teleport/<base>/<sandbox-id>`, so multiple agents off the same
    base branch never collide.
@@ -80,7 +83,7 @@ teleport --safe claude     # -> claude   (prompts intact)
    **Ctrl-\\**) to toggle the **collapsible left sidebar** — the control center
    for all your sandboxes. The agent reflows to make room, and the sidebar
    captures: **↑/↓** move · **Enter** switch to the selected sandbox · **n** new
-   sandbox (pick claude/codex/opencode or a custom command) · **d** delete it
+   sandbox (pick any preinstalled agent or a custom command) · **d** delete it
    (asks `y/n`) · **x** detach and exit · **Esc** close. The status bar and sidebar
    stay up even with no agent attached (and while a new one is creating), so the
    menu always works. Deleting the *current* sandbox hands off to a neighbour;

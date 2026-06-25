@@ -5,7 +5,7 @@
  * `runSessionLoop` then drives one persistent `TeleportSession` (one compositor),
  * swapping sandboxes in place on a switch so there's no teardown/flash.
  */
-import { knownAgent, yoloFlagFor, SANDBOX_REPO_PATH } from './config.js';
+import { knownAgent, yoloFlagFor, KNOWN_AGENTS, SANDBOX_REPO_PATH } from './config.js';
 import {
   createSandbox,
   ensureStarted,
@@ -66,7 +66,7 @@ const TERMINAL_PRESENT: Present = {
 };
 
 /** Agents offered in the in-session "new sandbox" picker. */
-const NEW_AGENTS = ['claude', 'codex', 'opencode'];
+const NEW_AGENTS = KNOWN_AGENTS;
 
 /** Returns the live sandbox list as sidebar items, marking the attached one.
  * Sandboxes being torn down (or errored) are dropped so a just-deleted one

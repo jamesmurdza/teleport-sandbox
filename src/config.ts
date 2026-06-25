@@ -97,13 +97,49 @@ export const AGENTS: Record<string, AgentDef> = {
     localCredFile: '.codex/auth.json',
     sandboxCredFile: '.codex/auth.json',
   },
+  gemini: {
+    name: 'gemini',
+    startCommand: 'gemini',
+    apiKeyEnv: 'GEMINI_API_KEY',
+    // Gemini CLI caches its OAuth token + settings under ~/.gemini.
+    localCredFile: '.gemini/oauth_creds.json',
+    sandboxCredFile: '.gemini/oauth_creds.json',
+    companionFiles: [{ local: '.gemini/settings.json', sandbox: '.gemini/settings.json' }],
+  },
+  copilot: {
+    name: 'copilot',
+    startCommand: 'copilot',
+    apiKeyEnv: 'COPILOT_GITHUB_TOKEN',
+  },
   opencode: {
     name: 'opencode',
     startCommand: 'opencode',
     localCredFile: '.local/share/opencode/auth.json',
     sandboxCredFile: '.local/share/opencode/auth.json',
   },
+  kimi: {
+    name: 'kimi',
+    startCommand: 'kimi',
+    apiKeyEnv: 'KIMI_API_KEY',
+  },
+  kilo: {
+    name: 'kilo',
+    startCommand: 'kilo',
+    // Kilo manages its own auth in the sandbox; no single API-key env var.
+  },
+  goose: {
+    name: 'goose',
+    startCommand: 'goose',
+    // Goose stores provider config under ~/.config/goose and uses its own keyring.
+  },
+  pi: {
+    name: 'pi',
+    startCommand: 'pi',
+  },
 };
+
+/** Command names of every known agent, in display order. */
+export const KNOWN_AGENTS = Object.keys(AGENTS);
 
 /** Returns the known-agent definition for a command, if any. */
 export function knownAgent(command: string): AgentDef | undefined {
