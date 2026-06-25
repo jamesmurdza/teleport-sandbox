@@ -175,20 +175,29 @@ async function prepareClaudeConfig(
   dir: string,
   opts: { bypass: boolean; importHostConfig: boolean },
 ): Promise<void> {
-  try {
-    let conf: Record<string, unknown> = {};
-    if (opts.importHostConfig) {
-      try {
-        conf = JSON.parse(await readFile(join(homedir(), '.claude.json'), 'utf8'));
-      } catch {
-        conf = {};
-      }
+  const readLocalJson = async (rel: string): Promise<Record<string, unknown>> => {
+    try {
+      return JSON.parse(await readFile(join(homedir(), rel), 'utf8'));
+    } catch {
+      return {};
     }
+  };
+
+  try {
+    // ~/.claude.json: account/onboarding (host) + per-dir trust + bypass accepted.
+    const conf = opts.importHostConfig ? await readLocalJson('.claude.json') : {};
     const projects = (conf.projects as Record<string, Record<string, unknown>>) ?? {};
     projects[dir] = { ...(projects[dir] ?? {}), hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true };
     conf.projects = projects;
     if (opts.bypass) conf.bypassPermissionsModeAccepted = true;
     await writeHomeFile(sandbox, '.claude.json', JSON.stringify(conf, null, 2), '600');
+
+    // ~/.claude/settings.json: the actual switch that skips the bypass-mode prompt.
+    if (opts.bypass) {
+      const settings = opts.importHostConfig ? await readLocalJson('.claude/settings.json') : {};
+      settings.skipDangerousModePermissionPrompt = true;
+      await writeHomeFile(sandbox, '.claude/settings.json', JSON.stringify(settings, null, 2), '600');
+    }
   } catch (err) {
     log(`note: could not pre-accept claude prompts (${err instanceof Error ? err.message : err}).`);
   }
