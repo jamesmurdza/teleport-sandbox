@@ -71,9 +71,12 @@ teleport --safe claude     # -> claude   (prompts intact)
 4. **Auto-push.** New commits made inside the sandbox are pushed to that branch
    automatically, via Daytona's git toolbox. **Your GitHub token is never written
    into the sandbox** — it's passed per-call from your machine.
-5. **Attach.** The agent runs inside a `tmux` session in the sandbox and is
-   streamed over a PTY. tmux draws the bottom **status bar** natively (sandbox id,
-   agent, repo, branch, push status), so it never corrupts the agent's UI. Press
+5. **Attach.** The agent runs in a persistent Daytona PTY session (kept alive
+   server-side, so detach/reconnect re-attaches to the same running agent — no
+   in-sandbox tmux). Locally teleport is a **terminal compositor**: it parses the
+   agent's output into a headless emulator and renders it, drawing its own bottom
+   **status bar** (sandbox id, agent, repo, branch, push status) on a reserved row
+   and bridging mouse + scroll-wheel (with local scrollback). Press
    **Ctrl-\\** at any time to open the **sandbox menu** — a centered overlay with
    Switch sandbox (detach and return to the picker), Detach and exit (leave
    running), Stop sandbox and exit (keep, restart later), or Delete sandbox and
@@ -120,8 +123,9 @@ npm run typecheck   # type-check without emitting
 ### Architecture
 
 All Daytona SDK calls go through `src/daytona.ts` and `src/sandbox-ops.ts`. The
-agent runs in a tmux session in the sandbox; locally `src/session.ts` is a dumb
-PTY passthrough and the status bar is rendered by tmux (config in
-`src/tui/tmux.ts`). Git clone + branch + auto-push are in `src/git/`. Credential
-discovery/import is in `src/auth/`. The CLI is wired in `src/cli.ts` and
-`src/runner.ts`.
+agent runs in a persistent Daytona PTY session; `src/session.ts` connects to it
+and drives a local **terminal compositor** (`src/tui/compositor.ts`) built from a
+headless emulator — `render.ts` (buffer→ANSI diff), `statusbar.ts` (the local
+bar), and `mouse.ts` (mouse/scroll bridge). Git clone + branch + auto-push are in
+`src/git/`. Credential discovery/import is in `src/auth/`. The CLI is wired in
+`src/cli.ts` and `src/runner.ts`.
