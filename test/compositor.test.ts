@@ -41,10 +41,11 @@ test('start paints a frame and the status bar on the bottom row', () => {
 test('feed renders agent output into the agent region', async () => {
   const { c, writes } = harness(6, 20);
   c.start();
-  await new Promise<void>((res) => {
-    c.feed('\x1b[1;1HHELLO');
-    setTimeout(res, 30);
-  });
+  c.feed('\x1b[1;1HHELLO');
+  // Rendering is coalesced on a timer; poll until it lands (avoids flakiness).
+  for (let i = 0; i < 100 && !writes.join('').includes('HELLO'); i++) {
+    await new Promise((res) => setTimeout(res, 10));
+  }
   assert.ok(writes.join('').includes('HELLO'));
   c.stop();
 });
