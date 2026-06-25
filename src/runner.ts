@@ -95,6 +95,19 @@ async function listSandboxItems(currentId: string): Promise<SidebarItem[]> {
     }));
 }
 
+/** Maps one session to a sidebar item (used for the stopped-preview view). */
+function sidebarItemOf(s: Session): SidebarItem {
+  return {
+    id: s.id,
+    agent: s.command || s.agent || '?',
+    state: s.state || '?',
+    current: false,
+    repo: s.repo || undefined,
+    branch: s.branch || undefined,
+    createdAt: s.createdAt || undefined,
+  };
+}
+
 /** Full flow for `teleport <command>`: create the sandbox, then run the session. */
 export async function startNew(opts: StartOptions): Promise<void> {
   const first = await prepareNew(opts);
@@ -357,10 +370,11 @@ async function runSessionLoop(first: Prepared | null): Promise<void> {
   };
   const session = new TeleportSession(deps);
   let current = first;
+  let stoppedView: Session | null = null; // a stopped sandbox being previewed
   let endMsg = '';
   try {
     for (;;) {
-      // Attached to a sandbox, or idle (chrome up, no agent) when there is none.
+      // Attached to a sandbox; previewing a stopped one; or idle (no agent).
       let outcome;
       if (current) {
         try {
@@ -368,6 +382,8 @@ async function runSessionLoop(first: Prepared | null): Promise<void> {
         } finally {
           current.autopush?.stop();
         }
+      } else if (stoppedView) {
+        outcome = await session.showStopped(sidebarItemOf(stoppedView), () => listSandboxItems(''));
       } else {
         outcome = await session.idle(IDLE_MESSAGE, () => listSandboxItems(''));
       }
@@ -375,11 +391,30 @@ async function runSessionLoop(first: Prepared | null): Promise<void> {
       if (outcome === 'switch' && deps.switchTarget.id) {
         const id = deps.switchTarget.id;
         const openSidebar = deps.switchTarget.openSidebar ?? false;
+        const start = deps.switchTarget.start ?? false;
         deps.switchTarget.id = undefined;
         deps.switchTarget.openSidebar = undefined;
-        session.connecting(`connecting to ${id.slice(0, 8)}…`);
+        deps.switchTarget.start = undefined;
         const next = await getSession(id).catch(() => null);
-        current = next ? await prepareExisting(next, openSidebar) : null;
+        if (!next) {
+          current = null;
+          stoppedView = null;
+          continue;
+        }
+        if (RUNNING_STATES.has(next.state) || start) {
+          // Running, or the user pressed Return to start it → attach live.
+          session.connecting(
+            RUNNING_STATES.has(next.state)
+              ? `connecting to ${id.slice(0, 8)}…`
+              : `starting ${id.slice(0, 8)}…`,
+          );
+          current = await prepareExisting(next, openSidebar);
+          stoppedView = null;
+        } else {
+          // Navigated to a stopped sandbox → show the "press Return" notice.
+          current = null;
+          stoppedView = next;
+        }
         continue;
       }
 
@@ -387,6 +422,7 @@ async function runSessionLoop(first: Prepared | null): Promise<void> {
         const created = await createInSession(session);
         if (created) {
           current = created;
+          stoppedView = null;
         } else if (current) {
           // Cancelled: re-attach the current sandbox with the sidebar open.
           const id = current.spec.sandbox.id;
@@ -401,6 +437,7 @@ async function runSessionLoop(first: Prepared | null): Promise<void> {
         // The last sandbox: delete it and drop to idle (the menu keeps working).
         if (current) await current.spec.sandbox.delete().catch(() => {});
         current = null;
+        stoppedView = null;
         continue;
       }
 

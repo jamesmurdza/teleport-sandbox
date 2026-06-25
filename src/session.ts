@@ -50,11 +50,18 @@ export interface AttachSpec {
 
 /** Global hooks shared across every attachment in one interactive session. */
 export interface SessionDeps {
-  /** Written by the sidebar when the user picks a different sandbox to switch to. */
-  switchTarget: { id?: string; openSidebar?: boolean };
+  /**
+   * Written by the sidebar when the user picks a different sandbox. `start`
+   * forces a stopped sandbox to be started (Enter); without it, navigating to a
+   * stopped sandbox just shows a "press Return to start" message.
+   */
+  switchTarget: { id?: string; openSidebar?: boolean; start?: boolean };
   /** Deletes a sandbox by id (sidebar `d`). */
   deleteSandbox: (id: string) => Promise<void>;
 }
+
+/** How long the selection must settle before the agent view follows it. */
+const PREVIEW_DEBOUNCE_MS = 150;
 
 /**
  * How an attach ended. 'switch'/'detached'/'ended' leave the sandbox running;
@@ -66,6 +73,11 @@ type Pty = Awaited<ReturnType<Sandbox['process']['createPty']>>;
 
 /** Status-bar fields shown while idle (no agent attached). */
 const IDLE_BAR: BarInfo = { shortId: 'teleport', agent: '—' };
+
+/** Builds status-bar fields from a sidebar item (for an instant switch). */
+function barFromItem(item: SidebarItem): BarInfo {
+  return { shortId: item.id.slice(0, 8), agent: item.agent, repo: item.repo, branch: item.branch };
+}
 
 /** Compact "5m ago" / "3h ago" / "2d ago" from an ISO timestamp. */
 function relativeAge(iso: string): string {
@@ -159,6 +171,10 @@ export class TeleportSession {
   private currentPty: Pty | null = null;
   private listProvider: () => Promise<SidebarItem[]> = async () => [];
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
+  /** Id of the sandbox currently shown in the agent pane (or null when idle). */
+  private shownId: string | null = null;
+  /** Debounce timer for the live preview as the selection moves. */
+  private previewTimer: ReturnType<typeof setTimeout> | null = null;
   /** Resolver for the in-flight attach; sidebar callbacks call it. */
   private settle: ((o: AttachOutcome) => void) | null = null;
   private readonly stdin = process.stdin;
@@ -204,9 +220,27 @@ export class TeleportSession {
   async idle(message: string, listSandboxes: () => Promise<SidebarItem[]>): Promise<AttachOutcome> {
     const compositor = this.ensureCompositor(IDLE_BAR);
     this.listProvider = listSandboxes;
+    this.shownId = null;
     if (!this.started) this.startInteractive(compositor);
     compositor.setBar(IDLE_BAR);
     compositor.resetAgent(message);
+    compositor.openSidebar();
+    void this.refresh();
+    return this.waitOutcome(null);
+  }
+
+  /**
+   * Shows a "stopped — press Return to start" notice for a sandbox the user
+   * navigated to, with the chrome up and the sidebar still navigable (so they can
+   * keep browsing). Resolves on the next sidebar action.
+   */
+  async showStopped(item: SidebarItem, listSandboxes: () => Promise<SidebarItem[]>): Promise<AttachOutcome> {
+    const compositor = this.ensureCompositor(barFromItem(item));
+    this.listProvider = listSandboxes;
+    this.shownId = item.id;
+    if (!this.started) this.startInteractive(compositor);
+    compositor.setBar(barFromItem(item));
+    compositor.resetAgent(`⏸  ${item.id.slice(0, 8)} is stopped — press Return to start it`);
     compositor.openSidebar();
     void this.refresh();
     return this.waitOutcome(null);
@@ -216,6 +250,7 @@ export class TeleportSession {
   async attach(spec: AttachSpec): Promise<AttachOutcome> {
     const compositor = this.ensureCompositor(spec.bar);
     this.listProvider = spec.listSandboxes;
+    this.shownId = spec.sandbox.id;
     spec.bindStatus?.((text) => compositor.setLiveStatus(text));
 
     const envs = await this.buildEnv(spec);
@@ -263,6 +298,8 @@ export class TeleportSession {
   dispose(): void {
     if (this.refreshTimer) clearInterval(this.refreshTimer);
     this.refreshTimer = null;
+    if (this.previewTimer) clearTimeout(this.previewTimer);
+    this.previewTimer = null;
     this.stdin.off('data', this.onStdin);
     process.stdout.off('resize', this.onResize);
     this.compositor?.stop();
@@ -298,6 +335,7 @@ export class TeleportSession {
       sendInput: (d) => void this.currentPty?.sendInput(d).catch(() => {}),
       onAgentSize: (c, r) => void this.currentPty?.resize(c, r).catch(() => {}),
       onSidebarSelect: (item) => this.onSelect(item),
+      onSelectionChange: (item) => this.onSelectionChange(item),
       onSessionAction: (action) => this.settle?.(action),
       onNew: () => this.settle?.('new'),
       onInfo: (item) => this.showInfo(item),
@@ -342,6 +380,9 @@ export class TeleportSession {
 
   /** Resolves on the first of: agent exit (if a PTY), or a sidebar action. */
   private async waitOutcome(pty: Pty | null): Promise<AttachOutcome> {
+    // Cancel any pending preview from the previous state.
+    if (this.previewTimer) clearTimeout(this.previewTimer);
+    this.previewTimer = null;
     try {
       return await new Promise<AttachOutcome>((resolve) => {
         let done = false;
@@ -361,13 +402,48 @@ export class TeleportSession {
     }
   }
 
+  private isStopped(item: SidebarItem): boolean {
+    return item.state !== 'started';
+  }
+
+  /**
+   * The highlighted row changed (↑/↓ / click): after a short settle, make the
+   * agent view follow the selection. Running sandboxes attach live; stopped ones
+   * show a "press Return to start" message (the loop decides — `start` is false).
+   */
+  private onSelectionChange(item: SidebarItem): void {
+    if (this.previewTimer) clearTimeout(this.previewTimer);
+    if (item.id === this.shownId) return; // already shown
+    this.previewTimer = setTimeout(() => {
+      this.previewTimer = null;
+      this.requestSwitch(item, { start: false, openSidebar: true });
+    }, PREVIEW_DEBOUNCE_MS);
+  }
+
+  /** Enter / click on a row. */
   private onSelect(item: SidebarItem): void {
-    // Selecting the current sandbox just closes the sidebar; any other switches.
-    if (item.current) {
+    if (this.previewTimer) clearTimeout(this.previewTimer);
+    this.previewTimer = null;
+    // The shown sandbox: close the sidebar to interact with it.
+    if (item.id === this.shownId && !this.isStopped(item)) {
       this.compositor?.toggleSidebar();
       return;
     }
+    // Enter starts a stopped sandbox; running ones just attach and land.
+    this.requestSwitch(item, { start: this.isStopped(item), openSidebar: false });
+  }
+
+  /** Reflects the target in the chrome instantly, then asks the caller to swap. */
+  private requestSwitch(item: SidebarItem, opts: { start: boolean; openSidebar: boolean }): void {
+    if (item.id === this.shownId && !this.isStopped(item)) {
+      // Already shown and running → just (un)collapse the sidebar.
+      if (!opts.openSidebar) this.compositor?.closeSidebar();
+      return;
+    }
+    this.compositor?.setBar(barFromItem(item));
     this.deps.switchTarget.id = item.id;
+    this.deps.switchTarget.openSidebar = opts.openSidebar;
+    this.deps.switchTarget.start = opts.start;
     this.settle?.('switch');
   }
 

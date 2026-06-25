@@ -27,6 +27,7 @@ function harness(rows = 6, cols = 20) {
   const newCount: number[] = [];
   const infoFor: string[] = [];
   const openBranchFor: string[] = [];
+  const selectionChanges: string[] = [];
   const c = new Compositor({
     cols,
     rows,
@@ -35,6 +36,7 @@ function harness(rows = 6, cols = 20) {
     sendInput: (d) => toPty.push(typeof d === 'string' ? d : Buffer.from(d).toString('binary')),
     onAgentSize: (co, ro) => sizes.push([co, ro]),
     onSidebarSelect: (it, index) => selected.push({ id: it.id, index }),
+    onSelectionChange: (it) => selectionChanges.push(it.id),
     onSessionAction: (a) => sessionActions.push(a),
     onNew: () => newCount.push(1),
     onInfo: (it) => infoFor.push(it.id),
@@ -42,7 +44,7 @@ function harness(rows = 6, cols = 20) {
     onDeleteCurrent: (cur, nb) => deleteCurrent.push({ id: cur.id, neighbour: nb?.id ?? null }),
     onDeleteOther: (it) => inlineActions.push({ kind: 'delete', id: it.id }),
   });
-  return { c, writes, toPty, sizes, selected, sessionActions, deleteCurrent, inlineActions, newCount, infoFor, openBranchFor, out: () => writes.join('') };
+  return { c, writes, toPty, sizes, selected, sessionActions, deleteCurrent, inlineActions, newCount, infoFor, openBranchFor, selectionChanges, out: () => writes.join('') };
 }
 
 const sandboxes = [
@@ -114,6 +116,18 @@ test('x detaches the session; n requests a new sandbox', () => {
   assert.deepEqual(sessionActions, ['detached']);
   c.input(Buffer.from('n')); // request a new sandbox
   assert.equal(newCount.length, 1);
+  c.stop();
+});
+
+test('moving the selection fires onSelectionChange (live preview)', () => {
+  const { c, selectionChanges } = harness(12, 80);
+  c.start();
+  c.setSandboxes(sandboxes);
+  c.input(Buffer.from('\x1d')); // open (selection on current, index 0)
+  c.input(Buffer.from('\x1b[B')); // down → bbbb2222
+  c.input(Buffer.from('\x1b[B')); // down → cccc3333
+  c.input(Buffer.from('\x1b[B')); // already at end → no change, no event
+  assert.deepEqual(selectionChanges, ['bbbb2222', 'cccc3333']);
   c.stop();
 });
 

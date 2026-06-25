@@ -82,7 +82,9 @@ teleport --safe claude     # -> claude   (prompts intact)
    and bridging mouse + scroll-wheel (with local scrollback). Press **Ctrl-]** (or
    **Ctrl-\\**) to toggle the **collapsible left sidebar** — the control center
    for all your sandboxes. The agent reflows to make room, and the sidebar
-   captures: **↑/↓** move · **Enter** switch to the selected sandbox · **n** new
+   captures: **↑/↓** move — the agent view follows the highlighted sandbox live
+   (a stopped one shows "press Return to start it") · **Enter** open/start the
+   selected sandbox · **n** new
    sandbox (pick any preinstalled agent or a custom command) · **i** info panel ·
    **g** open the sandbox's branch on GitHub · **d** delete it (asks `y/n`) ·
    **x** detach and exit · **Esc** close. The status bar and sidebar

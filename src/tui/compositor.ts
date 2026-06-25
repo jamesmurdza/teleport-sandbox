@@ -65,6 +65,9 @@ export interface CompositorOptions {
   onAgentSize?: (cols: number, rows: number) => void;
   /** Called when a sidebar row is activated to switch to it (Enter / click). */
   onSidebarSelect?: (item: SidebarItem, index: number) => void;
+  /** Called when the highlighted sidebar row changes (↑/↓ / click) — drives the
+   * live preview of the selected sandbox in the agent pane. */
+  onSelectionChange?: (item: SidebarItem) => void;
   /** Detaches and exits the current session (the `x` action). */
   onSessionAction?: (outcome: 'detached') => void;
   /** Creates a new sandbox (the `n` action). */
@@ -476,8 +479,11 @@ export class Compositor {
   private moveSelection(delta: number): void {
     const n = this.sidebarItems.length;
     if (!n) return;
-    this.sidebarSelected = Math.max(0, Math.min(this.sidebarSelected + delta, n - 1));
+    const next = Math.max(0, Math.min(this.sidebarSelected + delta, n - 1));
+    if (next === this.sidebarSelected) return;
+    this.sidebarSelected = next;
     this.scheduleRender();
+    this.opts.onSelectionChange?.(this.sidebarItems[next]);
   }
 
   private activateSelection(): void {
@@ -491,9 +497,10 @@ export class Compositor {
     const rows = Math.max(0, this.rows - 1 - 2);
     const start = windowStart(this.sidebarSelected, this.sidebarItems.length, rows);
     const idx = start + (screenRow - 2);
-    if (idx >= 0 && idx < this.sidebarItems.length) {
+    if (idx >= 0 && idx < this.sidebarItems.length && idx !== this.sidebarSelected) {
       this.sidebarSelected = idx;
       this.scheduleRender();
+      this.opts.onSelectionChange?.(this.sidebarItems[idx]);
     }
   }
 
