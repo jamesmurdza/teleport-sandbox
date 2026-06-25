@@ -20,6 +20,7 @@ import { sandboxHome } from './sandbox-ops.js';
 import { overlayMenu } from './tui/overlay.js';
 import { Compositor } from './tui/compositor.js';
 import type { BarInfo } from './tui/statusbar.js';
+import type { SidebarItem } from './tui/sidebar.js';
 
 /** Ctrl-\ (FS, 0x1c) — the key that opens the teleport sandbox menu. */
 const MENU_KEY = 0x1c;
@@ -39,6 +40,14 @@ export interface AttachOptions {
    * through the sandbox.
    */
   bindStatus?: (update: (text: string) => void) => void;
+  /** Provider for the sidebar's sandbox list (polled while attached). */
+  listSandboxes?: () => Promise<SidebarItem[]>;
+  /**
+   * Holder the attach writes the chosen sandbox id into when the user picks a
+   * different sandbox from the sidebar; the caller reads it on a 'switch'
+   * outcome to reconnect directly (instead of re-opening the picker).
+   */
+  switchTarget?: { id?: string };
 }
 
 /**
@@ -134,13 +143,37 @@ export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<Att
   };
 
   let menuOpen = false;
-  const compositor = new Compositor({
+
+  // Resolve the outcome on the first of: agent exit, or a menu/sidebar action.
+  let settled = false;
+  let resolveOutcome!: (o: AttachOutcome) => void;
+  const outcome = new Promise<AttachOutcome>((r) => (resolveOutcome = r));
+  const settle = (o: AttachOutcome) => {
+    if (settled) return;
+    settled = true;
+    resolveOutcome(o);
+  };
+
+  let comp!: Compositor;
+  comp = new Compositor({
     cols,
     rows,
     bar: opts.bar,
     write: (d) => process.stdout.write(d),
     sendInput: (d) => void pty.sendInput(d),
+    onAgentSize: (c2, r2) => void pty.resize(c2, r2).catch(() => {}),
+    onSidebarSelect: (item) => {
+      // Selecting the current sandbox just closes the sidebar; picking any other
+      // detaches and tells the caller to reconnect to it (by full id).
+      if (item.current) {
+        comp.toggleSidebar();
+        return;
+      }
+      if (opts.switchTarget) opts.switchTarget.id = item.id;
+      settle('switch');
+    },
   });
+  const compositor = comp;
   opts.bindStatus?.((text) => compositor.setLiveStatus(text));
 
   const { pty, fresh } = await attachPty(sandbox, {
@@ -163,20 +196,22 @@ export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<Att
     await pty.resize(cols, agentRows).catch(() => {});
   }
 
+  // Poll the sandbox list to keep the sidebar current.
+  const refresh = async () => {
+    if (!opts.listSandboxes) return;
+    try {
+      compositor.setSandboxes(await opts.listSandboxes());
+    } catch {
+      /* ignore transient list failures */
+    }
+  };
+  void refresh();
+  const refreshTimer = opts.listSandboxes ? setInterval(() => void refresh(), 3000) : null;
+
   const stdin = process.stdin;
   const wasRaw = stdin.isRaw ?? false;
   if (stdin.setRawMode) stdin.setRawMode(true);
   stdin.resume();
-
-  // Resolve the outcome on the first of: agent exit, or a menu action.
-  let settled = false;
-  let resolveOutcome!: (o: AttachOutcome) => void;
-  const outcome = new Promise<AttachOutcome>((r) => (resolveOutcome = r));
-  const settle = (o: AttachOutcome) => {
-    if (settled) return;
-    settled = true;
-    resolveOutcome(o);
-  };
 
   const openMenu = async (): Promise<AttachOutcome | null> => {
     const choice = await overlayMenu('teleport — sandbox menu', [
@@ -222,10 +257,9 @@ export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<Att
 
   const onResize = () => {
     if (menuOpen) return;
-    const c = process.stdout.columns ?? 80;
-    const r = process.stdout.rows ?? 24;
-    compositor.resize(c, r);
-    void pty.resize(c, Math.max(1, r - 1));
+    // The compositor reflows and resizes the PTY (via onAgentSize) to the new
+    // agent area, accounting for the sidebar.
+    compositor.resize(process.stdout.columns ?? 80, process.stdout.rows ?? 24);
   };
 
   stdin.on('data', onStdin);
@@ -238,6 +272,7 @@ export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<Att
   // *without* killing the PTY — the agent keeps running server-side so a later
   // reconnect (or 'switch') re-attaches to it. Stop/delete of the sandbox itself
   // is the caller's job.
+  if (refreshTimer) clearInterval(refreshTimer);
   stdin.off('data', onStdin);
   process.stdout.off('resize', onResize);
   compositor.stop();

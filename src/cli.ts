@@ -3,7 +3,7 @@
  */
 import { parseArgs, USAGE, type Command } from './args.js';
 import { TeleportError, getSession, listSessions, type Session } from './daytona.js';
-import { startNew, reconnect } from './runner.js';
+import { startNew, reconnect, type SwitchRef } from './runner.js';
 import { runDoctor } from './doctor.js';
 import { overlayMenu } from './tui/overlay.js';
 
@@ -47,47 +47,60 @@ async function listCommand(): Promise<number> {
 }
 
 /** `teleport` with no args: pick a sandbox to reconnect to, or start fresh. */
-async function pickerCommand(): Promise<number> {
-  // Loop so "Switch sandbox" from the in-sandbox menu returns here to pick again.
+async function pickerCommand(switchRef: SwitchRef = {}): Promise<number> {
+  // Loop so a 'switch' (sidebar pick or the in-session menu) returns here.
   for (;;) {
-    const sessions = await listSessions();
-    if (sessions.length === 0) {
-      out('No open sandboxes. Run `teleport <command>` to start one.');
-      return 0;
+    let target: Session | null = null;
+
+    // A sandbox chosen from the in-session sidebar → reconnect straight to it.
+    if (switchRef.id) {
+      const id = switchRef.id;
+      switchRef.id = undefined;
+      target = await getSession(id).catch(() => null);
+      if (!target) out(`Could not open sandbox ${id}.`);
     }
 
-    const choice = await overlayMenu<Session | 'new' | null>(
-      'Open sandboxes — reconnect (Ctrl-D deletes):',
-      [
-        ...sessions.map((s) => ({
-          label: formatSession(s),
-          value: s as Session | 'new' | null,
-        })),
-        { label: 'Start a new sandbox here', value: 'new' as const },
-      ],
-      {
-        fullscreen: true,
-        onDelete: async (item) => {
-          const s = item.value;
-          if (!s || s === 'new') return false; // only real sandboxes are deletable
-          try {
-            await s.sandbox.delete();
-            return true;
-          } catch {
-            return false;
-          }
+    if (!target) {
+      const sessions = await listSessions();
+      if (sessions.length === 0) {
+        out('No open sandboxes. Run `teleport <command>` to start one.');
+        return 0;
+      }
+      const choice = await overlayMenu<Session | 'new' | null>(
+        'Open sandboxes — reconnect (Ctrl-D deletes):',
+        [
+          ...sessions.map((s) => ({
+            label: formatSession(s),
+            value: s as Session | 'new' | null,
+          })),
+          { label: 'Start a new sandbox here', value: 'new' as const },
+        ],
+        {
+          fullscreen: true,
+          onDelete: async (item) => {
+            const s = item.value;
+            if (!s || s === 'new') return false; // only real sandboxes are deletable
+            try {
+              await s.sandbox.delete();
+              return true;
+            } catch {
+              return false;
+            }
+          },
         },
-      },
-    );
+      );
 
-    if (!choice) return 0;
-    if (choice === 'new') {
-      out('Run `teleport <command>` to start a new sandbox.');
-      return 0;
+      if (!choice) return 0;
+      if (choice === 'new') {
+        out('Run `teleport <command>` to start a new sandbox.');
+        return 0;
+      }
+      target = choice;
     }
-    const outcome = await reconnect(choice);
+
+    const outcome = await reconnect(target, switchRef);
     if (outcome !== 'switch') return 0;
-    // 'switch': loop back to re-render the picker with a fresh sandbox list.
+    // 'switch': loop — reconnect to switchRef.id if set, else re-show the picker.
   }
 }
 
@@ -129,9 +142,11 @@ async function dispatch(cmd: Command): Promise<number> {
     case 'push':
       return pushCommand(cmd.id);
     case 'run': {
-      const outcome = await startNew({ command: cmd.command, args: cmd.args, yolo: cmd.yolo });
-      // "Switch sandbox" from the in-sandbox menu drops back to the picker.
-      if (outcome === 'switch') return pickerCommand();
+      const switchRef: SwitchRef = {};
+      const outcome = await startNew({ command: cmd.command, args: cmd.args, yolo: cmd.yolo }, switchRef);
+      // A 'switch' (sidebar pick or menu) hands off to the picker loop, which
+      // reconnects straight to switchRef.id when the sidebar chose a sandbox.
+      if (outcome === 'switch') return pickerCommand(switchRef);
       return 0;
     }
   }

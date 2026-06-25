@@ -8,6 +8,7 @@ import {
   createSandbox,
   ensureStarted,
   getSession,
+  listSessions,
   tagBranch,
   type Session,
 } from './daytona.js';
@@ -23,6 +24,7 @@ import { setupRepo } from './git/repo.js';
 import { AutoPush, type PushStatus } from './git/autopush.js';
 import { attach, statusBridge, type AttachOutcome, type StatusBridge } from './session.js';
 import type { BarInfo } from './tui/statusbar.js';
+import type { SidebarItem } from './tui/sidebar.js';
 import { overlayMenu, overlayConfirm } from './tui/overlay.js';
 
 function log(msg: string): void {
@@ -36,8 +38,24 @@ export interface StartOptions {
   yolo?: boolean;
 }
 
+/** Holds the sandbox id chosen from the sidebar, read by the caller on 'switch'. */
+export interface SwitchRef {
+  id?: string;
+}
+
+/** Returns the live sandbox list as sidebar items, marking the attached one. */
+async function listSandboxItems(currentId: string): Promise<SidebarItem[]> {
+  const sessions = await listSessions();
+  return sessions.map((s) => ({
+    id: s.id,
+    agent: s.command || s.agent || '?',
+    state: s.state || '?',
+    current: s.id === currentId,
+  }));
+}
+
 /** Full flow for `teleport <command>`. */
-export async function startNew(opts: StartOptions): Promise<AttachOutcome> {
+export async function startNew(opts: StartOptions, switchRef: SwitchRef = {}): Promise<AttachOutcome> {
   const cwd = process.cwd();
   const repo = await inspectLocalRepo(cwd);
 
@@ -158,7 +176,7 @@ export async function startNew(opts: StartOptions): Promise<AttachOutcome> {
     });
   }
 
-  return runInteractive(sandbox, runCommand, cwdInSandbox, env, bar, status, autopush);
+  return runInteractive(sandbox, runCommand, cwdInSandbox, env, bar, status, switchRef, autopush);
 }
 
 /**
@@ -205,7 +223,7 @@ async function prepareClaudeConfig(
 }
 
 /** Full flow for reconnecting to an existing sandbox. */
-export async function reconnect(session: Session): Promise<AttachOutcome> {
+export async function reconnect(session: Session, switchRef: SwitchRef = {}): Promise<AttachOutcome> {
   log(`reconnecting to ${session.id} (${session.state})…`);
   await ensureStarted(session.sandbox);
 
@@ -242,7 +260,7 @@ export async function reconnect(session: Session): Promise<AttachOutcome> {
     }
   }
 
-  return runInteractive(session.sandbox, session.command, cwdInSandbox, env, bar, status, autopush);
+  return runInteractive(session.sandbox, session.command, cwdInSandbox, env, bar, status, switchRef, autopush);
 }
 
 async function runInteractive(
@@ -252,9 +270,18 @@ async function runInteractive(
   env: Record<string, string>,
   bar: BarInfo,
   status: StatusBridge,
+  switchRef: SwitchRef,
   autopush?: AutoPush,
 ): Promise<AttachOutcome> {
-  const outcome = await attach(sandbox, { command, cwd, env, bar, bindStatus: status.bind });
+  const outcome = await attach(sandbox, {
+    command,
+    cwd,
+    env,
+    bar,
+    bindStatus: status.bind,
+    listSandboxes: () => listSandboxItems(sandbox.id),
+    switchTarget: switchRef,
+  });
   autopush?.stop();
   switch (outcome) {
     case 'switch':

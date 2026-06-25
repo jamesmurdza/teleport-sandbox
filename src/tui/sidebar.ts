@@ -11,7 +11,7 @@ const ESC = '\x1b';
 const SEP = '│';
 
 export interface SidebarItem {
-  /** Short id shown in the row. */
+  /** Full sandbox id (used to reconnect); displayed shortened. */
   id: string;
   /** Agent/command name. */
   agent: string;
@@ -65,7 +65,7 @@ export function sidebarLines(
     const it = items[idx];
     const cursor = idx === selected ? '❯' : ' ';
     const marker = it.current ? '●' : ' ';
-    lines.push(padTrunc(`${cursor}${marker} ${it.id} ${it.agent}`, inner) + SEP);
+    lines.push(padTrunc(`${cursor}${marker} ${it.id.slice(0, 8)} ${it.agent}`, inner) + SEP);
   }
   return lines.slice(0, height);
 }
