@@ -91,7 +91,6 @@ export async function overlayMenu<T>(
     const rows = process.stdout.rows ?? 24;
     const widths = list.map((it) => width(it.label) + (it.detail ? width(it.detail) + 2 : 0));
     const g = computeBox(title, widths, cols, rows, hint);
-    const at = (r: number, c: number) => `${ESC}[${r};${c}H`;
     const lines: string[] = [];
 
     // Top border with embedded title.
@@ -120,12 +119,32 @@ export async function overlayMenu<T>(
     lines.push(BOX.v + `${ESC}[2m` + padTo(` ${hint}`, g.innerWidth) + `${ESC}[0m` + BOX.v);
     lines.push(BOX.bl + BOX.h.repeat(g.innerWidth) + BOX.br);
 
-    let out = `${ESC}7`; // save cursor
-    lines.forEach((l, i) => {
-      out += at(g.startRow + i, g.startCol) + l;
-    });
-    out += `${ESC}8`; // restore cursor
-    process.stdout.write(out);
+    if (opts.fullscreen) {
+      // Full repaint from cursor-home every frame: rewrite *every* screen row
+      // (box rows padded to centre, all others blanked) so no previous frame can
+      // survive. This does not depend on alt-screen, DEC save/restore (ESC7/8),
+      // or ESC[2J being honoured — only on `home` + per-line clear, which are
+      // near-universal. Avoids the "menu marches down the screen" artifact when
+      // those richer sequences are stripped by a terminal/multiplexer.
+      const top = g.startRow - 1;
+      const pad = ' '.repeat(g.startCol - 1);
+      const frame: string[] = [];
+      for (let r = 0; r < rows; r++) {
+        const bi = r - top;
+        frame.push(bi >= 0 && bi < lines.length ? pad + lines[bi] : '');
+      }
+      process.stdout.write(`${ESC}[H` + frame.map((l) => `${ESC}[2K${l}`).join('\r\n'));
+    } else {
+      // Floating overlay: draw on top at absolute coordinates without clearing;
+      // the caller repaints the underlying UI after the menu closes.
+      const at = (r: number, c: number) => `${ESC}[${r};${c}H`;
+      let out = `${ESC}7`; // save cursor
+      lines.forEach((l, i) => {
+        out += at(g.startRow + i, g.startCol) + l;
+      });
+      out += `${ESC}8`; // restore cursor
+      process.stdout.write(out);
+    }
   };
 
   // Enter alt-screen for fullscreen mode; always hide cursor + disable autowrap.
@@ -143,8 +162,12 @@ export async function overlayMenu<T>(
       // standalone menu closes (otherwise the process hangs instead of exiting).
       // In-session callers re-resume stdin immediately after.
       stdin.pause();
-      // Restore previous screen (fullscreen), show cursor, restore autowrap.
-      process.stdout.write(`${ESC}[?25h${ESC}[?7h` + (opts.fullscreen ? `${ESC}[?1049l` : ''));
+      // Show cursor, restore autowrap. For fullscreen, clear the menu then leave
+      // the alt screen: when alt-screen works this restores the prior screen;
+      // when it is unsupported the explicit clear still removes the menu.
+      process.stdout.write(
+        `${ESC}[?25h${ESC}[?7h` + (opts.fullscreen ? `${ESC}[2J${ESC}[H${ESC}[?1049l` : ''),
+      );
       resolve(result);
     };
     const onData = (data: Buffer) => {
