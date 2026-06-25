@@ -25,7 +25,9 @@ import type { SidebarItem } from './tui/sidebar.js';
 /** Ctrl-\ (FS, 0x1c) — toggles the teleport sandbox sidebar. */
 const MENU_KEY = 0x1c;
 
-export interface AttachOptions {
+/** Everything needed to attach one sandbox into the persistent compositor. */
+export interface AttachSpec {
+  sandbox: Sandbox;
   /** Command run in the PTY when the session does not already exist. */
   command: string;
   /** Working directory inside the sandbox. */
@@ -35,33 +37,33 @@ export interface AttachOptions {
   /** Static fields shown in the status bar. */
   bar: BarInfo;
   /**
-   * Called once with a function that updates the live status-bar segment, so the
-   * caller (auto-push) can push status into the compositor without a round-trip
-   * through the sandbox.
+   * Called with a function that updates the live status-bar segment, so the
+   * caller (auto-push) can push status into the compositor.
    */
   bindStatus?: (update: (text: string) => void) => void;
   /** Provider for the sidebar's sandbox list (polled while attached). */
-  listSandboxes?: () => Promise<SidebarItem[]>;
-  /**
-   * Holder the attach writes the chosen sandbox id into when the user picks a
-   * different sandbox from the sidebar; the caller reads it on a 'switch'
-   * outcome to reconnect directly (instead of re-opening the picker).
-   */
-  switchTarget?: { id?: string; openSidebar?: boolean };
-  /** Stops another (un-attached) sandbox by id, for the sidebar's `s` action. */
-  stopSandbox?: (id: string) => Promise<void>;
-  /** Deletes another (un-attached) sandbox by id, for the sidebar's `d` action. */
-  deleteSandbox?: (id: string) => Promise<void>;
-  /** Open the sidebar immediately on attach (used as the entry menu for bare `teleport`). */
-  openSidebarOnStart?: boolean;
+  listSandboxes: () => Promise<SidebarItem[]>;
+  /** Open the sidebar immediately (entry menu for bare `teleport`, or a hand-off). */
+  openSidebar?: boolean;
+}
+
+/** Global hooks shared across every attachment in one interactive session. */
+export interface SessionDeps {
+  /** Written by the sidebar when the user picks a different sandbox to switch to. */
+  switchTarget: { id?: string; openSidebar?: boolean };
+  /** Stops a sandbox by id (sidebar `s` on another sandbox). */
+  stopSandbox: (id: string) => Promise<void>;
+  /** Deletes a sandbox by id (sidebar `d` on another sandbox). */
+  deleteSandbox: (id: string) => Promise<void>;
 }
 
 /**
  * How an attach ended. 'switch'/'detached'/'ended' leave the sandbox running;
  * 'stopped' and 'deleted' tell the caller to stop or delete the sandbox.
- * 'switch' additionally tells the caller to return to the sandbox picker.
  */
 export type AttachOutcome = 'switch' | 'detached' | 'ended' | 'stopped' | 'deleted';
+
+type Pty = Awaited<ReturnType<Sandbox['process']['createPty']>>;
 
 /** True when a stdin chunk is exactly the menu trigger (Ctrl-\). */
 export function isMenuTrigger(chunk: Buffer): boolean {
@@ -129,168 +131,206 @@ async function attachPty(
   return { pty, fresh: true };
 }
 
-/** Attaches the local terminal to the sandbox's agent PTY. Resolves on detach/exit. */
-export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<AttachOutcome> {
-  const cols = process.stdout.columns ?? 80;
-  const rows = process.stdout.rows ?? 24;
-  const agentRows = Math.max(1, rows - 1); // bottom row is the status bar
+/**
+ * A persistent interactive session: owns the terminal compositor, stdin, and
+ * resize handling for the *whole* run, and swaps the agent PTY underneath when
+ * the user switches sandboxes. Because the compositor (and its sidebar) is built
+ * once and reused, switching never leaves the alt screen — there is no flash to a
+ * bare terminal and the sidebar stays put.
+ */
+export class TeleportSession {
+  private readonly deps: SessionDeps;
+  private compositor: Compositor | null = null;
+  private started = false;
+  private currentPty: Pty | null = null;
+  private listProvider: () => Promise<SidebarItem[]> = async () => [];
+  private refreshTimer: ReturnType<typeof setInterval> | null = null;
+  /** Resolver for the in-flight attach; sidebar callbacks call it. */
+  private settle: ((o: AttachOutcome) => void) | null = null;
+  private readonly stdin = process.stdin;
+  private wasRaw = false;
 
-  // A UTF-8 locale, truecolor, and a real TERM let the agent emit the colours and
-  // wide/Unicode characters the emulator then renders. C.UTF-8 is always present.
-  const localeLang = 'C.UTF-8';
-  const envs: Record<string, string> = {
-    HOME: await sandboxHome(sandbox),
-    LANG: localeLang,
-    LC_ALL: localeLang,
-    LC_CTYPE: localeLang,
-    TERM: 'xterm-256color',
-    COLORTERM: 'truecolor',
-    ...opts.env,
-  };
-
-  // Resolve the outcome on the first of: agent exit, or a sidebar action.
-  let settled = false;
-  let resolveOutcome!: (o: AttachOutcome) => void;
-  const outcome = new Promise<AttachOutcome>((r) => (resolveOutcome = r));
-  const settle = (o: AttachOutcome) => {
-    if (settled) return;
-    settled = true;
-    resolveOutcome(o);
-  };
-
-  // Performs a stop/delete on another sandbox, then refreshes the sidebar list.
-  // Errors (e.g. "Sandbox state change in progress") are shown in the status bar
-  // rather than crashing the process.
-  const inlineAction = (kind: 'stop' | 'delete', id: string) => {
-    void (async () => {
-      try {
-        if (kind === 'stop') await opts.stopSandbox?.(id);
-        else await opts.deleteSandbox?.(id);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        compositor.setLiveStatus(`✗ ${kind} failed: ${msg.replace(/^"|"$/g, '')}`);
-      }
-      await refresh();
-    })();
-  };
-
-  let comp!: Compositor;
-  comp = new Compositor({
-    cols,
-    rows,
-    bar: opts.bar,
-    write: (d) => process.stdout.write(d),
-    // Ignore send failures (e.g. a brief disconnect) — they must not crash the
-    // process via an unhandled rejection.
-    sendInput: (d) => void pty.sendInput(d).catch(() => {}),
-    onAgentSize: (c2, r2) => void pty.resize(c2, r2).catch(() => {}),
-    onSidebarSelect: (item) => {
-      // Selecting the current sandbox just closes the sidebar; picking any other
-      // detaches and tells the caller to reconnect to it (by full id).
-      if (item.current) {
-        comp.toggleSidebar();
-        return;
-      }
-      if (opts.switchTarget) opts.switchTarget.id = item.id;
-      settle('switch');
-    },
-    // Detach exits the current session.
-    onSessionAction: (action) => settle(action),
-    // Stopping/deleting the *current* sandbox shouldn't break the sidebar flow:
-    // act on it in the background and switch to a neighbour. Only when there's
-    // nothing else to attach to does this end the session.
-    onCurrentAction: (kind, current, neighbour) => {
-      if (!neighbour) {
-        settle(kind === 'stop' ? 'stopped' : 'deleted');
-        return;
-      }
-      const op = kind === 'stop' ? opts.stopSandbox : opts.deleteSandbox;
-      void op?.(current.id).catch(() => {});
-      if (opts.switchTarget) {
-        opts.switchTarget.id = neighbour.id;
-        opts.switchTarget.openSidebar = true; // keep managing — don't break the flow
-      }
-      settle('switch');
-    },
-    // Stop/delete of *another* sandbox happens in place.
-    onInlineAction: (kind, item) => inlineAction(kind, item.id),
-  });
-  const compositor = comp;
-  opts.bindStatus?.((text) => compositor.setLiveStatus(text));
-
-  const { pty, fresh } = await attachPty(sandbox, {
-    cwd: opts.cwd,
-    envs,
-    cols,
-    rows: agentRows,
-    onData: (data) => compositor.feed(data),
-  });
-
-  compositor.start();
-
-  if (fresh) {
-    // Replace the login shell with the agent so the PTY ends when the agent exits.
-    await pty.sendInput(`exec ${opts.command}\n`);
-  } else {
-    // Reconnected to a running agent: nudge a SIGWINCH so an alt-screen TUI
-    // repaints its current screen into our fresh emulator.
-    await pty.resize(cols - 1, agentRows).catch(() => {});
-    await pty.resize(cols, agentRows).catch(() => {});
+  constructor(deps: SessionDeps) {
+    this.deps = deps;
   }
 
-  // Poll the sandbox list to keep the sidebar current.
-  const refresh = async () => {
-    if (!opts.listSandboxes) return;
+  /** Shows a centered notice in the agent area (e.g. while a switch connects). */
+  connecting(label: string): void {
+    this.compositor?.resetAgent(label);
+  }
+
+  /** Attaches a sandbox and resolves when it ends (switch/detach/stop/delete/exit). */
+  async attach(spec: AttachSpec): Promise<AttachOutcome> {
+    const compositor = this.ensureCompositor(spec.bar);
+    this.listProvider = spec.listSandboxes;
+    spec.bindStatus?.((text) => compositor.setLiveStatus(text));
+
+    const envs = await this.buildEnv(spec);
+
+    if (!this.started) {
+      this.startInteractive(compositor);
+      compositor.resetAgent('connecting…');
+    } else {
+      compositor.setBar(spec.bar);
+    }
+    if (spec.openSidebar) compositor.openSidebar();
+    else compositor.closeSidebar();
+
+    const size = compositor.agentSize();
+    const { pty, fresh } = await attachPty(spec.sandbox, {
+      cwd: spec.cwd,
+      envs,
+      cols: size.cols,
+      rows: size.rows,
+      onData: (data) => compositor.feed(data),
+    });
+    this.currentPty = pty;
+
+    if (fresh) {
+      // Replace the login shell with the agent so the PTY ends when it exits.
+      await pty.sendInput(`exec ${spec.command}\n`);
+    } else {
+      // Nudge a SIGWINCH so an alt-screen TUI repaints into the fresh emulator.
+      await pty.resize(Math.max(1, size.cols - 1), size.rows).catch(() => {});
+      await pty.resize(size.cols, size.rows).catch(() => {});
+    }
+
+    void this.refresh();
+
+    const result = await new Promise<AttachOutcome>((resolve) => {
+      let done = false;
+      const settle = (o: AttachOutcome) => {
+        if (done) return;
+        done = true;
+        resolve(o);
+      };
+      this.settle = settle; // sidebar callbacks resolve this attach
+      pty
+        .wait()
+        .then(() => settle('ended'))
+        .catch(() => settle('ended'));
+    });
+    this.settle = null;
+
+    // Drop the WebSocket *without* killing the PTY — the agent keeps running
+    // server-side so a reconnect re-attaches to it. The compositor stays alive.
+    await pty.disconnect().catch(() => {});
+    this.currentPty = null;
+    return result;
+  }
+
+  /** Tears down the compositor and restores the terminal at the end of the run. */
+  dispose(): void {
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
+    this.refreshTimer = null;
+    this.stdin.off('data', this.onStdin);
+    process.stdout.off('resize', this.onResize);
+    this.compositor?.stop();
+    if (this.stdin.setRawMode) this.stdin.setRawMode(this.wasRaw);
+    this.stdin.pause();
+  }
+
+  // --- internals ------------------------------------------------------------
+
+  private async buildEnv(spec: AttachSpec): Promise<Record<string, string>> {
+    // A UTF-8 locale, truecolor, and a real TERM let the agent emit the colours
+    // and wide/Unicode characters the emulator renders. C.UTF-8 is always present.
+    const localeLang = 'C.UTF-8';
+    return {
+      HOME: await sandboxHome(spec.sandbox),
+      LANG: localeLang,
+      LC_ALL: localeLang,
+      LC_CTYPE: localeLang,
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      ...spec.env,
+    };
+  }
+
+  private ensureCompositor(bar: BarInfo): Compositor {
+    if (this.compositor) return this.compositor;
+    this.compositor = new Compositor({
+      cols: process.stdout.columns ?? 80,
+      rows: process.stdout.rows ?? 24,
+      bar,
+      write: (d) => process.stdout.write(d),
+      // Ignore send failures (a brief disconnect) — must not crash via rejection.
+      sendInput: (d) => void this.currentPty?.sendInput(d).catch(() => {}),
+      onAgentSize: (c, r) => void this.currentPty?.resize(c, r).catch(() => {}),
+      onSidebarSelect: (item) => this.onSelect(item),
+      onSessionAction: (action) => this.settle?.(action),
+      onCurrentAction: (kind, current, neighbour) => this.onCurrentAction(kind, current, neighbour),
+      onInlineAction: (kind, item) => this.inlineAction(kind, item.id),
+    });
+    return this.compositor;
+  }
+
+  private startInteractive(compositor: Compositor): void {
+    compositor.start();
+    this.wasRaw = this.stdin.isRaw ?? false;
+    if (this.stdin.setRawMode) this.stdin.setRawMode(true);
+    this.stdin.resume();
+    this.stdin.on('data', this.onStdin);
+    process.stdout.on('resize', this.onResize);
+    this.refreshTimer = setInterval(() => void this.refresh(), 3000);
+    this.started = true;
+  }
+
+  // Ctrl-\ / Ctrl-] toggle the sidebar; everything else goes to the compositor.
+  private readonly onStdin = (chunk: Buffer): void => {
+    if (isMenuTrigger(chunk)) {
+      this.compositor?.toggleSidebar();
+      return;
+    }
+    this.compositor?.input(chunk);
+  };
+
+  private readonly onResize = (): void => {
+    this.compositor?.resize(process.stdout.columns ?? 80, process.stdout.rows ?? 24);
+  };
+
+  private async refresh(): Promise<void> {
     try {
-      compositor.setSandboxes(await opts.listSandboxes());
+      this.compositor?.setSandboxes(await this.listProvider());
     } catch {
       /* ignore transient list failures */
     }
-  };
-  void refresh();
-  const refreshTimer = opts.listSandboxes ? setInterval(() => void refresh(), 3000) : null;
+  }
 
-  // For bare `teleport`, the sidebar *is* the entry menu — open it immediately.
-  if (opts.openSidebarOnStart) compositor.openSidebar();
-
-  const stdin = process.stdin;
-  const wasRaw = stdin.isRaw ?? false;
-  if (stdin.setRawMode) stdin.setRawMode(true);
-  stdin.resume();
-
-  // Ctrl-\ and Ctrl-] both toggle the sidebar (the control center for switching
-  // and stop/delete/detach); all other keys go to the compositor.
-  const onStdin = (chunk: Buffer) => {
-    if (isMenuTrigger(chunk)) {
-      compositor.toggleSidebar();
+  private onSelect(item: SidebarItem): void {
+    // Selecting the current sandbox just closes the sidebar; any other switches.
+    if (item.current) {
+      this.compositor?.toggleSidebar();
       return;
     }
-    compositor.input(chunk);
-  };
+    this.deps.switchTarget.id = item.id;
+    this.settle?.('switch');
+  }
 
-  const onResize = () => {
-    // The compositor reflows and resizes the PTY (via onAgentSize) to the new
-    // agent area, accounting for the sidebar.
-    compositor.resize(process.stdout.columns ?? 80, process.stdout.rows ?? 24);
-  };
+  // Stopping/deleting the *current* sandbox hands off to a neighbour so the flow
+  // continues; only with no neighbour does it end the session.
+  private onCurrentAction(kind: 'stop' | 'delete', current: SidebarItem, neighbour: SidebarItem | null): void {
+    if (!neighbour) {
+      this.settle?.(kind === 'stop' ? 'stopped' : 'deleted');
+      return;
+    }
+    const op = kind === 'stop' ? this.deps.stopSandbox : this.deps.deleteSandbox;
+    void op(current.id).catch(() => {});
+    this.deps.switchTarget.id = neighbour.id;
+    this.deps.switchTarget.openSidebar = true;
+    this.settle?.('switch');
+  }
 
-  stdin.on('data', onStdin);
-  process.stdout.on('resize', onResize);
-  pty.wait().then(() => settle('ended')).catch(() => settle('ended'));
-
-  const result = await outcome;
-
-  // Teardown: stop listening, restore the terminal, and drop the WebSocket
-  // *without* killing the PTY — the agent keeps running server-side so a later
-  // reconnect (or 'switch') re-attaches to it. Stop/delete of the sandbox itself
-  // is the caller's job.
-  if (refreshTimer) clearInterval(refreshTimer);
-  stdin.off('data', onStdin);
-  process.stdout.off('resize', onResize);
-  compositor.stop();
-  if (stdin.setRawMode) stdin.setRawMode(wasRaw);
-  stdin.pause();
-  await pty.disconnect().catch(() => {});
-
-  return result;
+  // Stop/delete of another sandbox happens in place; errors surface in the bar.
+  private inlineAction(kind: 'stop' | 'delete', id: string): void {
+    void (async () => {
+      try {
+        await (kind === 'stop' ? this.deps.stopSandbox : this.deps.deleteSandbox)(id);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.compositor?.setLiveStatus(`✗ ${kind} failed: ${msg.replace(/^"|"$/g, '')}`);
+      }
+      await this.refresh();
+    })();
+  }
 }

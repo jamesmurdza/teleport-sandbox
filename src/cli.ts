@@ -10,7 +10,7 @@ import {
   RUNNING_STATES,
   type Session,
 } from './daytona.js';
-import { startNew, reconnect, type SwitchRef } from './runner.js';
+import { startNew, reconnect } from './runner.js';
 import { runDoctor } from './doctor.js';
 
 function out(msg: string): void {
@@ -55,40 +55,19 @@ async function listCommand(): Promise<number> {
 /**
  * `teleport` with no args: open the sidebar (the single sandbox menu). There is
  * no separate startup picker — we attach to the most-recent sandbox and open the
- * sidebar immediately, so you can browse, switch, stop, and delete from there.
+ * sidebar immediately; switching/stopping/deleting all happen there. The session
+ * loop (in the runner) handles switches in place, so this returns when the whole
+ * interactive session ends.
  */
-async function pickerCommand(switchRef: SwitchRef = {}): Promise<number> {
-  // Loop so a 'switch' from the sidebar reconnects to the chosen sandbox.
-  for (;;) {
-    let target: Session | null = null;
-    let openSidebar = false;
-
-    // A sandbox chosen from the sidebar → land in it directly. A delete/stop
-    // hand-off keeps the sidebar open so management continues uninterrupted.
-    if (switchRef.id) {
-      const id = switchRef.id;
-      switchRef.id = undefined;
-      openSidebar = switchRef.openSidebar ?? false;
-      switchRef.openSidebar = undefined;
-      target = await getSession(id).catch(() => null);
-      if (!target) out(`Could not open sandbox ${id}.`);
-    }
-
-    // Otherwise (bare `teleport`) attach to the most-recent sandbox and open the
-    // sidebar so it acts as the entry menu.
-    if (!target) {
-      const live = (await listSessions()).filter((s) => !DEAD_STATES.has(s.state));
-      if (live.length === 0) {
-        out('No open sandboxes. Run `teleport <command>` to start one.');
-        return 0;
-      }
-      target = live.find((s) => RUNNING_STATES.has(s.state)) ?? live[0];
-      openSidebar = true;
-    }
-
-    const outcome = await reconnect(target, switchRef, openSidebar);
-    if (outcome !== 'switch') return 0;
+async function pickerCommand(): Promise<number> {
+  const live = (await listSessions()).filter((s) => !DEAD_STATES.has(s.state));
+  if (live.length === 0) {
+    out('No open sandboxes. Run `teleport <command>` to start one.');
+    return 0;
   }
+  const target = live.find((s) => RUNNING_STATES.has(s.state)) ?? live[0];
+  await reconnect(target, true);
+  return 0;
 }
 
 async function stopCommand(id: string): Promise<number> {
@@ -128,14 +107,10 @@ async function dispatch(cmd: Command): Promise<number> {
       return rmCommand(cmd.id);
     case 'push':
       return pushCommand(cmd.id);
-    case 'run': {
-      const switchRef: SwitchRef = {};
-      const outcome = await startNew({ command: cmd.command, args: cmd.args, yolo: cmd.yolo }, switchRef);
-      // A 'switch' (sidebar pick or menu) hands off to the picker loop, which
-      // reconnects straight to switchRef.id when the sidebar chose a sandbox.
-      if (outcome === 'switch') return pickerCommand(switchRef);
+    case 'run':
+      // The session loop handles in-session switches; this returns when done.
+      await startNew({ command: cmd.command, args: cmd.args, yolo: cmd.yolo });
       return 0;
-    }
   }
 }
 

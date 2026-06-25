@@ -312,6 +312,11 @@ export class Compositor {
     if (this.sidebarOpen) this.toggleSidebar();
   }
 
+  /** The agent's current drawable area (screen minus the sidebar and status row). */
+  agentSize(): { cols: number; rows: number } {
+    return { cols: this.agentCols(), rows: Math.max(1, this.rows - 1) };
+  }
+
   /** Updates the status-bar fields (e.g. after switching to a different sandbox). */
   setBar(bar: BarInfo): void {
     this.bar = bar;

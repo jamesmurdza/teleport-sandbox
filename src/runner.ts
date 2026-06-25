@@ -1,7 +1,9 @@
 /**
  * High-level orchestration for starting a new sandbox and reconnecting to an
  * existing one: ties together repo inspection, the credential modal, sandbox
- * creation, repo clone + teleport branch, auto-push, and the interactive attach.
+ * creation, repo clone + teleport branch, and auto-push. A single
+ * `runSessionLoop` then drives one persistent `TeleportSession` (one compositor),
+ * swapping sandboxes in place on a switch so there's no teardown/flash.
  */
 import { knownAgent, yoloFlagFor, SANDBOX_REPO_PATH } from './config.js';
 import {
@@ -23,7 +25,7 @@ import { join } from 'node:path';
 import { resolveGitHubToken } from './git/auth.js';
 import { setupRepo } from './git/repo.js';
 import { AutoPush, type PushStatus } from './git/autopush.js';
-import { attach, statusBridge, type AttachOutcome, type StatusBridge } from './session.js';
+import { TeleportSession, statusBridge, type AttachSpec, type SessionDeps } from './session.js';
 import type { BarInfo } from './tui/statusbar.js';
 import type { SidebarItem } from './tui/sidebar.js';
 import { overlayMenu, overlayConfirm } from './tui/overlay.js';
@@ -39,11 +41,10 @@ export interface StartOptions {
   yolo?: boolean;
 }
 
-/** Holds the sandbox id chosen from the sidebar, read by the caller on 'switch'. */
-export interface SwitchRef {
-  id?: string;
-  /** Keep the sidebar open after reconnecting (e.g. a delete/stop hand-off). */
-  openSidebar?: boolean;
+/** A prepared attachment: the spec plus its auto-push handle (stopped on detach). */
+interface Prepared {
+  spec: AttachSpec;
+  autopush?: AutoPush;
 }
 
 /** Returns the live sandbox list as sidebar items, marking the attached one.
@@ -61,8 +62,14 @@ async function listSandboxItems(currentId: string): Promise<SidebarItem[]> {
     }));
 }
 
-/** Full flow for `teleport <command>`. */
-export async function startNew(opts: StartOptions, switchRef: SwitchRef = {}): Promise<AttachOutcome> {
+/** Full flow for `teleport <command>`: create the sandbox, then run the session. */
+export async function startNew(opts: StartOptions): Promise<void> {
+  const first = await prepareNew(opts);
+  if (first) await runSessionLoop(first);
+}
+
+/** Builds the first attachment for a brand-new sandbox, or null if cancelled. */
+async function prepareNew(opts: StartOptions): Promise<Prepared | null> {
   const cwd = process.cwd();
   const repo = await inspectLocalRepo(cwd);
 
@@ -79,7 +86,7 @@ export async function startNew(opts: StartOptions, switchRef: SwitchRef = {}): P
     );
     if (!ok) {
       log('cancelled.');
-      return 'ended';
+      return null;
     }
   } else if (repo) {
     if (repo.dirty || repo.ahead > 0) {
@@ -110,7 +117,7 @@ export async function startNew(opts: StartOptions, switchRef: SwitchRef = {}): P
     );
     if (picked === null) {
       log('cancelled.');
-      return 'ended';
+      return null;
     }
     chosen = picked === 'none' ? null : picked;
   }
@@ -183,7 +190,17 @@ export async function startNew(opts: StartOptions, switchRef: SwitchRef = {}): P
     });
   }
 
-  return runInteractive(sandbox, runCommand, cwdInSandbox, env, bar, status, switchRef, autopush);
+  const spec: AttachSpec = {
+    sandbox,
+    command: runCommand,
+    cwd: cwdInSandbox,
+    env,
+    bar,
+    bindStatus: status.bind,
+    listSandboxes: () => listSandboxItems(sandbox.id),
+    openSidebar: false,
+  };
+  return { spec, autopush };
 }
 
 /**
@@ -230,12 +247,18 @@ async function prepareClaudeConfig(
 }
 
 /** Full flow for reconnecting to an existing sandbox. */
-export async function reconnect(
-  session: Session,
-  switchRef: SwitchRef = {},
-  openSidebar = false,
-): Promise<AttachOutcome> {
-  log(`reconnecting to ${session.id} (${session.state})…`);
+export async function reconnect(session: Session, openSidebar = false): Promise<void> {
+  log(`connecting to ${session.id.slice(0, 8)}…`);
+  const first = await prepareExisting(session, openSidebar);
+  await runSessionLoop(first);
+}
+
+/**
+ * Builds an attachment for an existing sandbox. Silent (no terminal logging): it
+ * runs both for the first connect and mid-session switches, and the latter happen
+ * while the compositor owns the alt screen.
+ */
+async function prepareExisting(session: Session, openSidebar: boolean): Promise<Prepared> {
   await ensureStarted(session.sandbox);
 
   const bar: BarInfo = {
@@ -271,56 +294,80 @@ export async function reconnect(
     }
   }
 
-  return runInteractive(session.sandbox, session.command, cwdInSandbox, env, bar, status, switchRef, autopush, openSidebar);
-}
-
-async function runInteractive(
-  sandbox: import('@daytonaio/sdk').Sandbox,
-  command: string,
-  cwd: string | undefined,
-  env: Record<string, string>,
-  bar: BarInfo,
-  status: StatusBridge,
-  switchRef: SwitchRef,
-  autopush?: AutoPush,
-  openSidebar = false,
-): Promise<AttachOutcome> {
-  const outcome = await attach(sandbox, {
-    command,
-    cwd,
+  const spec: AttachSpec = {
+    sandbox: session.sandbox,
+    command: session.command,
+    cwd: cwdInSandbox,
     env,
     bar,
     bindStatus: status.bind,
-    listSandboxes: () => listSandboxItems(sandbox.id),
-    switchTarget: switchRef,
+    listSandboxes: () => listSandboxItems(session.sandbox.id),
+    openSidebar,
+  };
+  return { spec, autopush };
+}
+
+/**
+ * Drives one persistent interactive session: a single compositor that the user
+ * can switch sandboxes within. Each 'switch' swaps the attachment in place (no
+ * teardown, no flash); stop/delete/detach/exit end the run. Result messages are
+ * logged only after the terminal is restored.
+ */
+async function runSessionLoop(first: Prepared): Promise<void> {
+  const deps: SessionDeps = {
+    switchTarget: {},
     stopSandbox: async (id) => {
       await (await getSession(id)).sandbox.stop();
     },
     deleteSandbox: async (id) => {
       await (await getSession(id)).sandbox.delete();
     },
-    openSidebarOnStart: openSidebar,
-  });
-  autopush?.stop();
-  switch (outcome) {
-    case 'switch':
-      log(`switching sandbox (${sandbox.id} keeps running, auto-stops when idle).`);
+  };
+  const session = new TeleportSession(deps);
+  let prep = first;
+  let endMsg = '';
+  try {
+    for (;;) {
+      const outcome = await session.attach(prep.spec);
+      prep.autopush?.stop();
+
+      if (outcome === 'switch' && deps.switchTarget.id) {
+        const id = deps.switchTarget.id;
+        const openSidebar = deps.switchTarget.openSidebar ?? false;
+        deps.switchTarget.id = undefined;
+        deps.switchTarget.openSidebar = undefined;
+        session.connecting(`connecting to ${id.slice(0, 8)}…`);
+        const next = await getSession(id).catch(() => null);
+        if (!next) {
+          endMsg = `could not open sandbox ${id}.`;
+          break;
+        }
+        prep = await prepareExisting(next, openSidebar);
+        continue;
+      }
+
+      const sandbox = prep.spec.sandbox;
+      if (outcome === 'stopped') {
+        await sandbox.stop().catch((e) => (endMsg = `failed to stop: ${msgOf(e)}`));
+        endMsg ||= `stopped ${sandbox.id}. Reconnect with \`teleport\` to restart it.`;
+      } else if (outcome === 'deleted') {
+        await sandbox.delete().catch((e) => (endMsg = `failed to delete: ${msgOf(e)}`));
+        endMsg ||= `deleted ${sandbox.id}.`;
+      } else if (outcome === 'detached') {
+        endMsg = `detached. Reconnect with \`teleport\` (${sandbox.id} keeps running, auto-stops when idle).`;
+      } else {
+        endMsg = `session ended. Remove the sandbox with \`teleport rm ${sandbox.id}\`.`;
+      }
       break;
-    case 'detached':
-      log(`detached. Reconnect with \`teleport\` (sandbox ${sandbox.id} keeps running, auto-stops when idle).`);
-      break;
-    case 'stopped':
-      await sandbox.stop().catch((e) => log(`failed to stop: ${e instanceof Error ? e.message : e}`));
-      log(`stopped ${sandbox.id}. Reconnect with \`teleport\` to restart it.`);
-      break;
-    case 'deleted':
-      await sandbox.delete().catch((e) => log(`failed to delete: ${e instanceof Error ? e.message : e}`));
-      log(`deleted ${sandbox.id}.`);
-      break;
-    default:
-      log(`sandbox session ended. Remove the sandbox with \`teleport rm ${sandbox.id}\`.`);
+    }
+  } finally {
+    session.dispose();
+    if (endMsg) log(endMsg);
   }
-  return outcome;
+}
+
+function msgOf(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 function pushLabel(status: PushStatus, detail?: string): string {
