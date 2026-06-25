@@ -29,7 +29,7 @@ import { AutoPush, type PushStatus } from './git/autopush.js';
 import { TeleportSession, statusBridge, type AttachSpec, type SessionDeps } from './session.js';
 import type { BarInfo } from './tui/statusbar.js';
 import type { SidebarItem } from './tui/sidebar.js';
-import { overlayMenu, overlayConfirm, overlayPrompt } from './tui/overlay.js';
+import { overlayMenu, overlayConfirm } from './tui/overlay.js';
 
 function log(msg: string): void {
   process.stdout.write(`teleport: ${msg}\n`);
@@ -50,20 +50,29 @@ interface Prepared {
 
 /**
  * How the new-sandbox flow presents its modals and progress. At startup it uses
- * the bare terminal (fullscreen overlays, stdout logging); in-session it floats
- * overlays over the live compositor and shows progress in the agent placeholder.
+ * the bare terminal (fullscreen overlays, stdout logging); in-session every modal
+ * renders *inside the agent pane* via the compositor, so the sidebar and status
+ * bar are never disturbed, and progress shows in the agent placeholder.
  */
 interface Present {
-  fullscreen: boolean;
-  wrap<T>(fn: () => Promise<T>): Promise<T>;
   note(msg: string): void;
+  confirm(question: string): Promise<boolean>;
+  menu<T>(title: string, items: { label: string; detail?: string; value: T }[]): Promise<T | null>;
 }
 
 const TERMINAL_PRESENT: Present = {
-  fullscreen: true,
-  wrap: (fn) => fn(),
   note: (m) => log(m),
+  confirm: (q) => overlayConfirm(q, { fullscreen: true }),
+  menu: (title, items) => overlayMenu(title, items, { fullscreen: true }),
 };
+
+function sessionPresent(session: TeleportSession): Present {
+  return {
+    note: (m) => session.connecting(m),
+    confirm: (q) => session.confirm(q),
+    menu: (title, items) => session.menu(title, items),
+  };
+}
 
 /** Agents offered in the in-session "new sandbox" picker. */
 const NEW_AGENTS = KNOWN_AGENTS;
@@ -101,11 +110,7 @@ async function prepareNew(opts: StartOptions, present: Present = TERMINAL_PRESEN
 
   const hasRepo = !!(repo && repo.originUrl);
   if (!hasRepo) {
-    const ok = await present.wrap(() =>
-      overlayConfirm('Not in a git repo. Create a new blank sandbox with no repo?', {
-        fullscreen: present.fullscreen,
-      }),
-    );
+    const ok = await present.confirm('Not in a git repo. Create a new blank sandbox with no repo?');
     if (!ok) {
       present.note('cancelled.');
       return null;
@@ -127,16 +132,10 @@ async function prepareNew(opts: StartOptions, present: Present = TERMINAL_PRESEN
   type CredChoice = (typeof sources)[number] | 'none';
   let chosen: (typeof sources)[number] | null = null;
   if (sources.length > 0) {
-    const picked = await present.wrap(() =>
-      overlayMenu<CredChoice>(
-        `${opts.command} credentials`,
-        [
-          ...sources.map((s) => ({ label: s.label, detail: s.detail, value: s as CredChoice })),
-          { label: 'Skip', value: 'none' as CredChoice },
-        ],
-        { fullscreen: present.fullscreen },
-      ),
-    );
+    const picked = await present.menu<CredChoice>(`${opts.command} credentials`, [
+      ...sources.map((s) => ({ label: s.label, detail: s.detail, value: s as CredChoice })),
+      { label: 'Skip', value: 'none' as CredChoice },
+    ]);
     if (picked === null) {
       present.note('cancelled.');
       return null;
@@ -420,23 +419,15 @@ async function runSessionLoop(first: Prepared | null): Promise<void> {
 /** Sentinel value for the "custom command" choice in the new-agent picker. */
 const CUSTOM_CHOICE = ' custom';
 
-/** Asks which agent/command to run for a new sandbox (over the live compositor). */
+/** Asks which agent/command to run for a new sandbox (modal in the agent pane). */
 async function pickNewCommand(session: TeleportSession): Promise<string | null> {
-  const choice = await session.modal(() =>
-    overlayMenu<string>(
-      'New sandbox — choose an agent',
-      [
-        ...NEW_AGENTS.map((a) => ({ label: a, value: a })),
-        { label: 'Custom command…', value: CUSTOM_CHOICE },
-      ],
-      { fullscreen: false },
-    ),
-  );
+  const choice = await session.menu<string>('New sandbox — choose an agent', [
+    ...NEW_AGENTS.map((a) => ({ label: a, value: a })),
+    { label: 'Custom command…', value: CUSTOM_CHOICE },
+  ]);
   if (choice === null) return null;
   if (choice !== CUSTOM_CHOICE) return choice;
-  return session.modal(() =>
-    overlayPrompt('Custom command', { fullscreen: false, placeholder: 'e.g. aider --model gpt-4o' }),
-  );
+  return session.prompt('Custom command', 'e.g. aider --model gpt-4o');
 }
 
 /** Creates a new sandbox from the in-session sidebar, keeping the chrome up. */
@@ -444,13 +435,10 @@ async function createInSession(session: TeleportSession): Promise<Prepared | nul
   const command = await pickNewCommand(session);
   if (!command) return null;
   const [cmd, ...args] = command.trim().split(/\s+/);
-  const present: Present = {
-    fullscreen: false,
-    wrap: (fn) => session.modal(fn),
-    note: (m) => session.connecting(m),
-  };
   try {
-    return await prepareNew({ command: cmd, args, yolo: true }, present);
+    const prep = await prepareNew({ command: cmd, args, yolo: true }, sessionPresent(session));
+    if (prep) prep.spec.openSidebar = true; // created from the sidebar → keep it open
+    return prep;
   } catch (err) {
     session.connecting(`create failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;

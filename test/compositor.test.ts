@@ -200,6 +200,43 @@ test('keystrokes are NOT forwarded to the agent while the sidebar is open', () =
   c.stop();
 });
 
+test('a modal renders in the agent pane and resolves on Enter (sidebar stays up)', async () => {
+  const { c, writes } = harness(14, 80);
+  c.start();
+  c.setSandboxes(sandboxes);
+  c.input(Buffer.from('\x1d')); // open the sidebar
+  writes.length = 0;
+  const p = c.menu('Choose', [
+    { label: 'alpha', value: 'a' },
+    { label: 'beta', value: 'b' },
+  ]);
+  for (let i = 0; i < 50 && !writes.join('').includes('Choose'); i++) {
+    await new Promise((res) => setTimeout(res, 10));
+  }
+  const out = writes.join('');
+  assert.ok(out.includes('Choose') && out.includes('alpha'), 'modal shown in the agent pane');
+  // The modal never repaints the sidebar band — its writes are all at columns
+  // past the sidebar width (no escape positions a row at column 1 here).
+  assert.ok(!/\x1b\[\d+;1H[^\x1b]*alpha/.test(out), 'modal not drawn over the sidebar');
+
+  c.input(Buffer.from('\x1b[B')); // down → beta
+  c.input(Buffer.from('\r')); // enter
+  assert.equal(await p, 'b');
+  c.stop();
+});
+
+test('a modal can be cancelled with Esc', async () => {
+  const { c } = harness(14, 80);
+  c.start();
+  c.setSandboxes(sandboxes);
+  c.input(Buffer.from('\x1d'));
+  const p = c.menu('Choose', [{ label: 'alpha', value: 'a' }]);
+  await new Promise((res) => setTimeout(res, 20));
+  c.input(Buffer.from('\x1b')); // Esc
+  assert.equal(await p, null);
+  c.stop();
+});
+
 test('openSidebar opens the sidebar (idempotently) as the entry menu', () => {
   const { c, writes, sizes } = harness(10, 80);
   c.start();

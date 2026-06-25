@@ -30,6 +30,7 @@ import {
   type SidebarItem,
 } from './sidebar.js';
 import { decodeKey } from './prompt.js';
+import { modalFrame, type ModalState, type ModalMenuItem } from './modal.js';
 import {
   extractSgrMouse,
   translateToAgent,
@@ -108,6 +109,8 @@ export class Compositor {
   private sidebarSelected = 0;
   private prevSidebar: string[] | null = null;
   private pendingDelete: SidebarItem | null = null;
+  /** A modal shown in the agent pane (sidebar/bar untouched). */
+  private modal: ModalState | null = null;
 
   private mouseEncoding: MouseEncoding = 'default';
   private realMouseProtocol: MouseProtocol = 'none';
@@ -116,7 +119,6 @@ export class Compositor {
 
   private renderTimer: NodeJS.Timeout | null = null;
   private disposed = false;
-  private paused = false;
   private readonly disposers: Array<() => void> = [];
 
   constructor(opts: CompositorOptions) {
@@ -165,6 +167,11 @@ export class Compositor {
   input(chunk: Buffer): void {
     const s = chunk.toString('binary');
     const { events, rest } = extractSgrMouse(s);
+    // A modal in the agent pane captures all keys (mouse is ignored).
+    if (this.modal) {
+      if (rest) this.modalInput(rest);
+      return;
+    }
     for (const ev of events) this.handleMouse(ev);
     if (!rest) return;
     // Ctrl-] toggles the sidebar.
@@ -201,6 +208,50 @@ export class Compositor {
     const mapped = translateToAgent(ev, this.rows - 1, w);
     if (!mapped || !protocolWantsEvent(mapped, protocol)) return;
     this.opts.sendInput(encodeMouse(mapped, this.mouseEncoding));
+  }
+
+  private modalInput(rest: string): void {
+    const m = this.modal;
+    if (!m) return;
+    if (m.kind === 'menu') {
+      switch (decodeKey(Buffer.from(rest, 'binary'))) {
+        case 'up':
+          m.selected = Math.max(0, m.selected - 1);
+          this.scheduleRender();
+          break;
+        case 'down':
+          m.selected = Math.min(m.items.length - 1, m.selected + 1);
+          this.scheduleRender();
+          break;
+        case 'enter':
+          this.closeModal(m.items[m.selected]?.value ?? null);
+          break;
+        case 'cancel':
+          this.closeModal(null);
+          break;
+        default:
+          break;
+      }
+      return;
+    }
+    // Prompt: edit the line; lone Esc/Ctrl-C cancels, Enter submits.
+    if (rest === '\x1b' || rest === '\x03') return this.closeModal(null);
+    if (rest === '\r' || rest === '\n') return this.closeModal(m.value.trim() || null);
+    if (rest.startsWith('\x1b')) return; // ignore arrows/escape sequences
+    for (const ch of rest) {
+      const b = ch.charCodeAt(0);
+      if (b === 0x7f || b === 0x08) m.value = [...m.value].slice(0, -1).join('');
+      else if (b >= 0x20 && b < 0x7f) m.value += ch;
+    }
+    this.scheduleRender();
+  }
+
+  private closeModal(value: unknown): void {
+    const m = this.modal;
+    this.modal = null;
+    this.prevFrame = null; // agent area returns to placeholder/agent
+    this.scheduleRender();
+    (m?.resolve as ((v: unknown) => void) | undefined)?.(value);
   }
 
   private navInput(buf: Buffer): void {
@@ -291,6 +342,22 @@ export class Compositor {
       this.pendingDelete = null;
     }
     if (this.sidebarOpen) this.scheduleRender();
+  }
+
+  /** Shows a selection modal in the agent pane; resolves to a value or null. */
+  menu(title: string, items: ModalMenuItem[]): Promise<unknown> {
+    return new Promise((resolve) => {
+      this.modal = { kind: 'menu', title, items, selected: 0, resolve };
+      this.scheduleRender();
+    });
+  }
+
+  /** Shows a text-input modal in the agent pane; resolves to a string or null. */
+  prompt(title: string, placeholder = ''): Promise<string | null> {
+    return new Promise((resolve) => {
+      this.modal = { kind: 'prompt', title, placeholder, value: '', resolve };
+      this.scheduleRender();
+    });
   }
 
   /** Opens the sidebar if it isn't already (e.g. on startup as the entry menu). */
@@ -440,13 +507,14 @@ export class Compositor {
   }
 
   private renderNow(): void {
-    if (this.disposed || this.paused) return;
+    if (this.disposed) return;
     const w = this.sidebarWidth();
     const agentRows = Math.max(1, this.rows - 1);
     const buf = this.term.buffer.active;
     const top = viewportTop(buf.baseY, this.scrollOffset);
-    const frame =
-      this.agentPlaceholder !== null
+    const frame = this.modal
+      ? modalFrame(this.modal, this.agentCols(), agentRows)
+      : this.agentPlaceholder !== null
         ? placeholderFrame(this.agentPlaceholder, this.agentCols(), agentRows)
         : frameFromBuffer(buf as never, top, this.agentCols(), agentRows);
 
@@ -480,6 +548,7 @@ export class Compositor {
     // agent shows it, the sidebar isn't capturing navigation, and no placeholder.
     if (
       !this.sidebarOpen &&
+      !this.modal &&
       this.scrollOffset === 0 &&
       !this.cursorHidden &&
       this.agentPlaceholder === null
@@ -507,23 +576,5 @@ export class Compositor {
     if (this.scrollOffset === 0) return;
     this.scrollOffset = 0;
     this.scheduleRender();
-  }
-
-  /** Stops painting (e.g. while the menu overlay owns the screen). */
-  pause(): void {
-    this.paused = true;
-  }
-
-  /** Resumes painting and forces a full repaint to erase any overlay. */
-  resume(): void {
-    if (!this.paused) return;
-    this.paused = false;
-    // A modal overlay may have re-enabled autowrap / shown the cursor / dropped
-    // mouse reporting; re-assert the compositor's terminal modes before repaint.
-    this.opts.write(`${ESC}[?7l${ESC}[?25l` + realTerminalMouseSequences(this.realMouseProtocol));
-    this.prevFrame = null;
-    this.prevBar = '';
-    this.prevSidebar = null;
-    this.renderNow();
   }
 }

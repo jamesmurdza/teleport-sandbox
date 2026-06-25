@@ -161,20 +161,26 @@ export class TeleportSession {
   }
 
   /**
-   * Runs a modal interaction (an overlay menu/prompt) over the live compositor:
-   * pauses painting, hands stdin to the overlay, and full-repaints on close — so
-   * the chrome stays put and the modal floats on top.
+   * Modal interactions render *inside the agent pane* (via the compositor), so
+   * the sidebar and status bar are never touched — nothing in the main view can
+   * disturb the sidebar.
    */
-  async modal<T>(fn: () => Promise<T>): Promise<T> {
-    this.compositor?.pause();
-    this.stdin.off('data', this.onStdin);
-    try {
-      return await fn();
-    } finally {
-      this.stdin.on('data', this.onStdin);
-      this.stdin.resume();
-      this.compositor?.resume();
-    }
+  async menu<T>(title: string, items: { label: string; detail?: string; value: T }[]): Promise<T | null> {
+    if (!this.compositor) return null;
+    return (await this.compositor.menu(title, items)) as T | null;
+  }
+
+  async prompt(title: string, placeholder = ''): Promise<string | null> {
+    return this.compositor ? this.compositor.prompt(title, placeholder) : null;
+  }
+
+  async confirm(question: string): Promise<boolean> {
+    return (
+      (await this.menu(question, [
+        { label: 'Yes', value: true },
+        { label: 'No', value: false },
+      ])) === true
+    );
   }
 
   /**
