@@ -98,8 +98,9 @@ teleport --safe claude     # -> claude   (prompts intact)
 
 There is no separate startup picker. Running `teleport` with no arguments
 attaches to your most-recent sandbox and opens the **sidebar** immediately, so a
-single surface handles browsing, switching, and stop/delete — in-session and at
-startup alike. (`teleport ls` still prints a non-interactive list.)
+single surface handles browsing, switching, and delete — in-session and at
+startup alike. With no sandboxes yet, it opens the **new-sandbox menu** straight
+away. (`teleport ls` still prints a non-interactive list.)
 
 ### Detach & reconnect
 

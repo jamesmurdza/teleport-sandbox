@@ -290,7 +290,8 @@ async function prepareClaudeConfig(
 export async function openSandboxes(): Promise<void> {
   const live = (await listSessions()).filter((s) => !DEAD_STATES.has(s.state));
   if (live.length === 0) {
-    await runSessionLoop(null);
+    // No sandboxes yet → open the new-sandbox menu straight away.
+    await runSessionLoop(null, true);
     return;
   }
   const target = live.find((s) => RUNNING_STATES.has(s.state)) ?? live[0];
@@ -361,7 +362,7 @@ async function prepareExisting(session: Session, openSidebar: boolean): Promise<
  */
 const IDLE_MESSAGE = 'No sandbox attached — Ctrl-] for the menu · x to exit';
 
-async function runSessionLoop(first: Prepared | null): Promise<void> {
+async function runSessionLoop(first: Prepared | null, autoNew = false): Promise<void> {
   const deps: SessionDeps = {
     switchTarget: {},
     deleteSandbox: async (id) => {
@@ -369,6 +370,7 @@ async function runSessionLoop(first: Prepared | null): Promise<void> {
     },
   };
   const session = new TeleportSession(deps);
+  if (autoNew) session.queueNew(); // open the new-sandbox menu as soon as the UI is up
   let current = first;
   let stoppedView: Session | null = null; // a stopped sandbox being previewed
   let endMsg = '';

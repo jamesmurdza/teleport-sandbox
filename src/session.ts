@@ -195,6 +195,11 @@ export class TeleportSession {
     this.compositor?.resetAgent(label);
   }
 
+  /** Queues the new-sandbox flow to run as soon as the session UI is up. */
+  queueNew(): void {
+    this.pendingOutcome = 'new';
+  }
+
   /**
    * Modal interactions render *inside the agent pane* (via the compositor), so
    * the sidebar and status bar are never touched — nothing in the main view can
