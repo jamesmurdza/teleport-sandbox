@@ -63,8 +63,13 @@ export interface CompositorOptions {
   onAgentSize?: (cols: number, rows: number) => void;
   /** Called when a sidebar row is activated to switch to it (Enter / click). */
   onSidebarSelect?: (item: SidebarItem, index: number) => void;
-  /** Ends the current session with this outcome (detach / stop / delete it). */
-  onSessionAction?: (outcome: 'detached' | 'stopped' | 'deleted') => void;
+  /** Detaches and exits the current session. */
+  onSessionAction?: (outcome: 'detached') => void;
+  /**
+   * Stops/deletes the *current* sandbox. `neighbour` is another sandbox to hand
+   * off to so the session (and sidebar) can continue, or null if none exists.
+   */
+  onCurrentAction?: (kind: 'stop' | 'delete', current: SidebarItem, neighbour: SidebarItem | null) => void;
   /** Performs an action on another (un-attached) sandbox, then the list refreshes. */
   onInlineAction?: (kind: 'stop' | 'delete', item: SidebarItem) => void;
 }
@@ -220,13 +225,20 @@ export class Compositor {
     }
   }
 
-  /** Stops the selected sandbox: ends the session if it's the current one,
-   * otherwise stops it in place (the caller refreshes the list). */
+  /** Stops the selected sandbox. Stopping the current one hands off to a
+   * neighbour (so the flow continues); others stop in place. */
   private stopSelected(): void {
     const it = this.sidebarItems[this.sidebarSelected];
     if (!it) return;
-    if (it.current) this.opts.onSessionAction?.('stopped');
+    if (it.current) this.actOnCurrent('stop', it);
     else this.opts.onInlineAction?.('stop', it);
+  }
+
+  /** Routes a stop/delete of the *current* sandbox, picking a neighbour to hand
+   * off to so deleting/stopping it doesn't tear down the sidebar flow. */
+  private actOnCurrent(kind: 'stop' | 'delete', it: SidebarItem): void {
+    const neighbour = this.sidebarItems.find((s) => !s.current) ?? null;
+    this.opts.onCurrentAction?.(kind, it, neighbour);
   }
 
   private askDelete(): void {
@@ -240,7 +252,7 @@ export class Compositor {
     const it = this.pendingDelete;
     this.pendingDelete = null;
     if (it) {
-      if (it.current) this.opts.onSessionAction?.('deleted');
+      if (it.current) this.actOnCurrent('delete', it);
       else this.opts.onInlineAction?.('delete', it);
     }
     this.scheduleRender();

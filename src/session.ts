@@ -192,8 +192,21 @@ export async function attach(sandbox: Sandbox, opts: AttachOptions): Promise<Att
       if (opts.switchTarget) opts.switchTarget.id = item.id;
       settle('switch');
     },
-    // Detach/stop/delete of the *current* sandbox ends the attach.
+    // Detach exits the current session.
     onSessionAction: (action) => settle(action),
+    // Stopping/deleting the *current* sandbox shouldn't break the sidebar flow:
+    // act on it in the background and switch to a neighbour. Only when there's
+    // nothing else to attach to does this end the session.
+    onCurrentAction: (kind, current, neighbour) => {
+      if (!neighbour) {
+        settle(kind === 'stop' ? 'stopped' : 'deleted');
+        return;
+      }
+      const op = kind === 'stop' ? opts.stopSandbox : opts.deleteSandbox;
+      void op?.(current.id).catch(() => {});
+      if (opts.switchTarget) opts.switchTarget.id = neighbour.id;
+      settle('switch');
+    },
     // Stop/delete of *another* sandbox happens in place.
     onInlineAction: (kind, item) => inlineAction(kind, item.id),
   });
