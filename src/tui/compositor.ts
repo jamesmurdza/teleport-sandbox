@@ -88,16 +88,6 @@ export interface CompositorOptions {
 /** Keybinding legend shown in the sidebar footer (two rows so it isn't clipped). */
 const SIDEBAR_LEGEND = ['↵ open   n new   i info', 'g web   d del   x exit'];
 
-/** Clamps a scrollback offset to [0, max]. */
-export function clampScroll(offset: number, max: number): number {
-  return Math.max(0, Math.min(offset, max));
-}
-
-/** Absolute top line of the rendered viewport given the live base and offset. */
-export function viewportTop(baseY: number, offset: number): number {
-  return Math.max(0, baseY - offset);
-}
-
 export class Compositor {
   private term: InstanceType<typeof Terminal>;
   private cols: number;
@@ -123,7 +113,6 @@ export class Compositor {
   private mouseEncoding: MouseEncoding = 'default';
   private realMouseProtocol: MouseProtocol = 'none';
   private cursorHidden = false;
-  private scrollOffset = 0;
 
   private renderTimer: NodeJS.Timeout | null = null;
   private disposed = false;
@@ -194,25 +183,21 @@ export class Compositor {
       this.navInput(Buffer.from(rest, 'binary'));
       return;
     }
-    // Typing while scrolled back snaps the viewport to the live bottom.
-    if (this.scrollOffset > 0) this.follow();
     this.opts.sendInput(Buffer.from(rest, 'binary'));
   }
 
   private handleMouse(ev: MouseEvent): void {
     const w = this.sidebarWidth();
     const protocol = this.mouseProtocol();
-    const dir = wheelDirection(ev);
-    // Wheel over the sidebar, or when the agent isn't tracking it → scrollback.
-    if (dir !== 0 && (protocol === 'none' || ev.col <= w)) {
-      this.scrollBy(dir * 3);
-      return;
-    }
+    // Wheel the agent doesn't track (or over the sidebar): ignore. We don't scroll
+    // a local viewport — that just flashes stale frames of a full-screen agent.
+    if (wheelDirection(ev) !== 0 && (protocol === 'none' || ev.col <= w)) return;
     // Clicks in the sidebar band select a row (and never reach the agent).
     if (w > 0 && ev.col <= w) {
       if (ev.pressed && !ev.motion && !isWheel(ev)) this.selectByRow(ev.row);
       return;
     }
+    // Forward to the agent (which tracks the wheel/clicks itself).
     const mapped = translateToAgent(ev, this.rows - 1, w);
     if (!mapped || !protocolWantsEvent(mapped, protocol)) return;
     this.opts.sendInput(encodeMouse(mapped, this.mouseEncoding));
@@ -337,7 +322,6 @@ export class Compositor {
   resize(cols: number, rows: number): void {
     this.cols = cols;
     this.rows = rows;
-    this.scrollOffset = 0;
     this.reflow();
   }
 
@@ -424,7 +408,6 @@ export class Compositor {
   resetAgent(placeholder = ''): void {
     this.term.reset();
     this.prevFrame = null;
-    this.scrollOffset = 0;
     this.cursorHidden = false;
     this.agentPlaceholder = placeholder;
     this.renderNow();
@@ -534,14 +517,6 @@ export class Compositor {
     while ((m = re.exec(text))) this.cursorHidden = m[1] === 'l';
   }
 
-  private scrollBy(lines: number): void {
-    const buf = this.term.buffer.active;
-    const maxOffset = Math.max(0, buf.length - (this.rows - 1));
-    const next = clampScroll(this.scrollOffset - lines, maxOffset);
-    if (next === this.scrollOffset) return;
-    this.scrollOffset = next;
-    this.scheduleRender();
-  }
 
   private scheduleRender(): void {
     if (this.renderTimer || this.disposed) return;
@@ -556,12 +531,11 @@ export class Compositor {
     const w = this.sidebarWidth();
     const agentRows = Math.max(1, this.rows - 1);
     const buf = this.term.buffer.active;
-    const top = viewportTop(buf.baseY, this.scrollOffset);
     const frame = this.modal
       ? modalFrame(this.modal, this.agentCols(), agentRows)
       : this.agentPlaceholder !== null
         ? placeholderFrame(this.agentPlaceholder, this.agentCols(), agentRows)
-        : frameFromBuffer(buf as never, top, this.agentCols(), agentRows);
+        : frameFromBuffer(buf as never, buf.baseY, this.agentCols(), agentRows);
 
     // Agent screen, painted to the right of the sidebar band.
     let out = renderFrameDiff(this.prevFrame, frame, 1, w + 1);
@@ -588,13 +562,7 @@ export class Compositor {
 
     // Cursor: in the agent area (offset by the sidebar), only when live, the
     // agent shows it, the sidebar isn't capturing navigation, and no placeholder.
-    if (
-      !this.sidebarOpen &&
-      !this.modal &&
-      this.scrollOffset === 0 &&
-      !this.cursorHidden &&
-      this.agentPlaceholder === null
-    ) {
+    if (!this.sidebarOpen && !this.modal && !this.cursorHidden && this.agentPlaceholder === null) {
       const cx = Math.min(this.cols, buf.cursorX + 1 + w);
       const cy = Math.min(agentRows, buf.cursorY + 1);
       out += `${ESC}[${cy};${cx}H${ESC}[?25h`;
@@ -602,13 +570,5 @@ export class Compositor {
       out += `${ESC}[?25l`;
     }
     if (out) this.opts.write(out);
-  }
-
-
-  /** Jumps the viewport back to the live bottom. */
-  follow(): void {
-    if (this.scrollOffset === 0) return;
-    this.scrollOffset = 0;
-    this.scheduleRender();
   }
 }

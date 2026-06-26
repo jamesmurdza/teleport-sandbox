@@ -1,18 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { clampScroll, viewportTop, Compositor } from '../src/tui/compositor.ts';
+import { Compositor } from '../src/tui/compositor.ts';
 import type { BarInfo } from '../src/tui/statusbar.ts';
-
-test('clampScroll bounds the offset to [0, max]', () => {
-  assert.equal(clampScroll(-5, 100), 0);
-  assert.equal(clampScroll(50, 100), 50);
-  assert.equal(clampScroll(200, 100), 100);
-});
-
-test('viewportTop never goes negative', () => {
-  assert.equal(viewportTop(10, 3), 7);
-  assert.equal(viewportTop(2, 10), 0);
-});
 
 const bar: BarInfo = { shortId: 'abc', agent: 'claude' };
 
