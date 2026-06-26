@@ -144,81 +144,90 @@ test('i and g act on the selected sandbox', () => {
   c.stop();
 });
 
-test('deleting the current sandbox hands off to a neighbour (keeps the flow)', () => {
+const tick = () => new Promise((res) => setTimeout(res, 25));
+
+test('deleting the current sandbox hands off to a neighbour (keeps the flow)', async () => {
   const { c, deleteCurrent, sessionActions } = harness(12, 80);
   c.start();
   c.setSandboxes(sandboxes); // current = aaaa1111, others present
   c.input(Buffer.from('\x1d')); // open, selection on current
-  c.input(Buffer.from('d')); // ask
-  c.input(Buffer.from('y')); // confirm
+  c.input(Buffer.from('d')); // open the delete modal
+  await tick();
+  c.input(Buffer.from('\r')); // Return = default (Delete)
+  await tick();
   assert.deepEqual(deleteCurrent, [{ id: 'aaaa1111', neighbour: 'bbbb2222' }]);
   assert.deepEqual(sessionActions, [], 'no abrupt session-ending action');
   c.stop();
 });
 
-test('deleting the current sandbox with no other sandbox ends the session', () => {
+test('deleting the current sandbox with no other sandbox ends the session', async () => {
   const { c, deleteCurrent } = harness(12, 80);
   c.start();
   c.setSandboxes([sandboxes[0]]); // only the current sandbox
   c.input(Buffer.from('\x1d'));
   c.input(Buffer.from('d'));
-  c.input(Buffer.from('y'));
+  await tick();
+  c.input(Buffer.from('\r'));
+  await tick();
   assert.deepEqual(deleteCurrent, [{ id: 'aaaa1111', neighbour: null }]);
   c.stop();
 });
 
 test('deleting another sandbox removes it optimistically and survives a stale refresh', async () => {
   const { c, writes, inlineActions } = harness(14, 80);
-  const flush = () => new Promise((res) => setTimeout(res, 25));
   c.start();
   c.setSandboxes(sandboxes); // aaaa(cur), bbbb, cccc
   c.input(Buffer.from('\x1d'));
   c.input(Buffer.from('\x1b[B')); // select bbbb2222
   c.input(Buffer.from('d'));
-  c.input(Buffer.from('y')); // confirm delete of bbbb2222
+  await tick();
+  c.input(Buffer.from('\r')); // Return = Delete
+  await tick();
   assert.deepEqual(inlineActions, [{ kind: 'delete', id: 'bbbb2222' }]);
 
   // A stale refresh still listing bbbb keeps it hidden (no flicker/reappear).
-  await flush();
   c.setSandboxes(sandboxes);
   writes.length = 0;
-  await flush();
+  await tick();
   assert.ok(!writes.join('').includes('bbbb2222'), 'optimistically removed despite stale refresh');
 
   // Server confirms bbbb gone → the filter clears.
   c.setSandboxes([sandboxes[0], sandboxes[2]]);
-  await flush();
-  // If a sandbox with that id appears again, it's shown.
+  await tick();
   writes.length = 0;
   c.setSandboxes(sandboxes);
-  await flush();
+  await tick();
   assert.ok(writes.join('').includes('bbbb2222'), 'filter cleared after server confirmed deletion');
   c.stop();
 });
 
-test('delete asks for confirmation; y confirms, anything else cancels', () => {
-  const { c, sessionActions, inlineActions } = harness(12, 80);
+test('delete modal: Return deletes, Esc cancels', async () => {
+  const { c, inlineActions } = harness(12, 80);
   c.start();
   c.setSandboxes(sandboxes);
   c.input(Buffer.from('\x1d'));
-  c.input(Buffer.from('\x1b[B')); // select another (index 1)
+  c.input(Buffer.from('\x1b[B')); // select bbbb2222
 
-  c.input(Buffer.from('d')); // ask
-  c.input(Buffer.from('n')); // cancel
+  c.input(Buffer.from('d')); // open modal
+  await tick();
+  c.input(Buffer.from('\x1b')); // Esc → cancel
+  await tick();
   assert.deepEqual(inlineActions, [], 'cancelled, no delete');
 
-  c.input(Buffer.from('d')); // ask
-  c.input(Buffer.from('y')); // confirm
+  c.input(Buffer.from('d')); // open modal again
+  await tick();
+  c.input(Buffer.from('\r')); // Return = default (Delete)
+  await tick();
   assert.deepEqual(inlineActions, [{ kind: 'delete', id: 'bbbb2222' }]);
-  assert.deepEqual(sessionActions, []);
   c.stop();
 });
 
-// Presses `d` and waits for the coalesced render, returning the painted output.
-async function footerAfterDelete(c: Compositor, writes: string[]): Promise<string> {
+// Presses `d` to open the delete modal and returns the painted output (whose
+// title names the selected sandbox).
+async function modalAfterDelete(c: Compositor, writes: string[]): Promise<string> {
   writes.length = 0;
   c.input(Buffer.from('d'));
-  for (let i = 0; i < 50 && !writes.join('').includes('delete '); i++) {
+  for (let i = 0; i < 50 && !writes.join('').includes('Delete sandbox'); i++) {
     await new Promise((res) => setTimeout(res, 10));
   }
   return writes.join('');
@@ -231,8 +240,8 @@ test('selection follows the same sandbox by id when the list reorders', async ()
   c.input(Buffer.from('\x1d'));
   c.input(Buffer.from('\x1b[B')); // select bbbb2222
   c.setSandboxes([sandboxes[2], sandboxes[1], sandboxes[0]]); // reorder
-  const out = await footerAfterDelete(c, writes);
-  assert.ok(out.includes('delete bbbb2222?'), 'still on bbbb2222 after reorder');
+  const out = await modalAfterDelete(c, writes);
+  assert.ok(out.includes('Delete sandbox bbbb2222?'), 'still on bbbb2222 after reorder');
   c.stop();
 });
 
@@ -244,8 +253,8 @@ test('deleting the selected sandbox keeps the cursor on the neighbour', async ()
   c.input(Buffer.from('\x1b[B')); // select bbbb2222 (index 1)
   // Simulate the post-delete refresh: bbbb is gone.
   c.setSandboxes([sandboxes[0], sandboxes[2]]); // [aaaa(cur), cccc]
-  const out = await footerAfterDelete(c, writes);
-  assert.ok(out.includes('delete cccc3333?'), 'cursor moved to the neighbour, not the current sandbox');
+  const out = await modalAfterDelete(c, writes);
+  assert.ok(out.includes('Delete sandbox cccc3333?'), 'cursor moved to the neighbour, not the current sandbox');
   c.stop();
 });
 

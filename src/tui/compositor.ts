@@ -115,7 +115,6 @@ export class Compositor {
   private sidebarItems: SidebarItem[] = [];
   private sidebarSelected = 0;
   private prevSidebar: string[] | null = null;
-  private pendingDelete: SidebarItem | null = null;
   /** Sandboxes deleted locally, filtered out until the server stops reporting them. */
   private readonly removedIds = new Set<string>();
   /** A modal shown in the agent pane (sidebar/bar untouched). */
@@ -269,12 +268,6 @@ export class Compositor {
 
   private navInput(buf: Buffer): void {
     const s = buf.toString('binary');
-    // A pending delete confirmation swallows the next key.
-    if (this.pendingDelete) {
-      if (s === 'y' || s === 'Y') this.confirmDelete();
-      else this.cancelDelete();
-      return;
-    }
     // Action keys.
     if (s === 'n' || s === 'N') return void this.opts.onNew?.();
     if (s === 'd') return this.askDelete();
@@ -307,36 +300,30 @@ export class Compositor {
     }
   }
 
+  /** Confirms deletion in a modal (default "Delete", so Return deletes). */
   private askDelete(): void {
     const it = this.sidebarItems[this.sidebarSelected];
     if (!it) return;
-    this.pendingDelete = it;
-    this.scheduleRender();
+    void this.menu(`Delete sandbox ${it.id.slice(0, 8)}?`, [
+      { label: 'Delete', value: 'delete' },
+      { label: 'Cancel', value: 'cancel' },
+    ]).then((choice) => {
+      if (choice === 'delete') this.performDelete(it);
+    });
   }
 
-  private confirmDelete(): void {
-    const it = this.pendingDelete;
-    this.pendingDelete = null;
-    if (it) {
-      if (it.current) {
-        // Hand off to a neighbour so deleting the current one keeps the flow;
-        // keep it filtered until the server confirms it's gone.
-        this.removedIds.add(it.id);
-        const neighbour = this.sidebarItems.find((s) => !s.current) ?? null;
-        this.opts.onDeleteCurrent?.(it, neighbour);
-      } else {
-        // Optimistically drop it from the list now — the slow API call + refresh
-        // happen in the background.
-        this.removedIds.add(it.id);
-        this.applyList(this.sidebarItems.filter((s) => s.id !== it.id));
-        this.opts.onDeleteOther?.(it);
-      }
+  private performDelete(it: SidebarItem): void {
+    // Keep it filtered until the server confirms it's gone (optimistic).
+    this.removedIds.add(it.id);
+    if (it.current) {
+      // Hand off to a neighbour so deleting the current one keeps the flow.
+      const neighbour = this.sidebarItems.find((s) => !s.current && s.id !== it.id) ?? null;
+      this.opts.onDeleteCurrent?.(it, neighbour);
+    } else {
+      // Drop it from the list now; the slow API call + refresh run in the background.
+      this.applyList(this.sidebarItems.filter((s) => s.id !== it.id));
+      this.opts.onDeleteOther?.(it);
     }
-    this.scheduleRender();
-  }
-
-  private cancelDelete(): void {
-    this.pendingDelete = null;
     this.scheduleRender();
   }
 
@@ -378,10 +365,6 @@ export class Compositor {
     let idx = prevId ? items.findIndex((it) => it.id === prevId) : -1;
     if (idx < 0) idx = Math.min(this.sidebarSelected, items.length - 1);
     this.sidebarSelected = Math.max(0, idx);
-    // Drop a pending delete whose target vanished from the list.
-    if (this.pendingDelete && !items.some((it) => it.id === this.pendingDelete?.id)) {
-      this.pendingDelete = null;
-    }
     if (this.sidebarOpen) this.scheduleRender();
   }
 
@@ -514,9 +497,8 @@ export class Compositor {
     if (it) this.opts.onSidebarSelect?.(it, this.sidebarSelected);
   }
 
-  /** Footer rows for the sidebar (delete-confirm prompt, else the legend). */
+  /** Footer rows for the sidebar (the keybinding legend). */
   private sidebarFooter(): string[] {
-    if (this.pendingDelete) return [`delete ${this.pendingDelete.id.slice(0, 8)}? y/n`, ''];
     return SIDEBAR_LEGEND;
   }
 
