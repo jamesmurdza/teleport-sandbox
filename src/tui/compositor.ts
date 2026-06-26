@@ -413,6 +413,20 @@ export class Compositor {
     this.renderNow();
   }
 
+  /**
+   * True when keystrokes go straight to the agent — i.e. neither the sidebar nor
+   * a modal is capturing input. Used by the controller to decide whether Ctrl-C
+   * is an agent interrupt (focused) or a quit/escape hatch (anything else).
+   */
+  agentFocused(): boolean {
+    return !this.sidebarOpen && !this.modal;
+  }
+
+  /** True while the sidebar band is open. */
+  get sidebarIsOpen(): boolean {
+    return this.sidebarOpen;
+  }
+
   /** Opens/closes the sidebar, reflowing the agent area to fit. */
   toggleSidebar(): void {
     this.sidebarOpen = !this.sidebarOpen;

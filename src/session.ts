@@ -384,8 +384,33 @@ export class TeleportSession {
       this.compositor?.toggleSidebar();
       return;
     }
+    // Ctrl-C is a universal escape hatch *except* when you're typing into the
+    // agent (where it's the agent's own interrupt). So in the sidebar, in a
+    // modal, while idle, or mid-create — any state that isn't the live agent —
+    // a lone Ctrl-C quits teleport instead of getting swallowed. This guarantees
+    // there's always a way out, even if an async step (e.g. creating a sandbox)
+    // is wedged. Esc still just cancels the sidebar/modal.
+    if (chunk.length === 1 && chunk[0] === 0x03 && this.compositor && !this.compositor.agentFocused()) {
+      this.quit();
+      return;
+    }
     this.compositor?.input(chunk);
   };
+
+  /**
+   * Quits teleport from anywhere. If a wait is active (idle / attached / stopped
+   * view) we settle it as 'detached' so the loop unwinds and disposes cleanly.
+   * If we're stuck in an async window with no active wait (e.g. a hung create),
+   * dispose directly and exit the process — the escape hatch must always work.
+   */
+  private quit(): void {
+    if (this.settle) {
+      this.settle('detached');
+      return;
+    }
+    this.dispose();
+    process.exit(0);
+  }
 
   private readonly onResize = (): void => {
     this.compositor?.resize(process.stdout.columns ?? 80, process.stdout.rows ?? 24);

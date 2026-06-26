@@ -42,6 +42,22 @@ const sandboxes = [
   { id: 'cccc3333', agent: 'claude', state: 'stopped', current: false },
 ];
 
+test('agentFocused is true only when no sidebar and no modal capture input', async () => {
+  const { c } = harness(12, 80);
+  c.start();
+  c.setSandboxes(sandboxes);
+  assert.equal(c.agentFocused(), true, 'agent has focus by default');
+  c.input(Buffer.from('\x1d')); // open the sidebar
+  assert.equal(c.agentFocused(), false, 'sidebar captures input');
+  c.input(Buffer.from('d')); // open the delete modal
+  await new Promise((r) => setTimeout(r, 25));
+  assert.equal(c.agentFocused(), false, 'modal captures input');
+  c.input(Buffer.from('\x1b')); // Esc → cancel modal
+  c.input(Buffer.from('\x1d')); // close the sidebar
+  assert.equal(c.agentFocused(), true, 'focus returns to the agent');
+  c.stop();
+});
+
 test('start paints a frame and the status bar on the bottom row', () => {
   const { c, out } = harness(6, 20);
   c.start();
