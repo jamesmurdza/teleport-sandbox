@@ -443,7 +443,17 @@ async function runSessionLoop(first: Prepared | null, autoNew = false): Promise<
         continue;
       }
 
-      // 'detached' (x) or 'ended' (agent exited) end the run.
+      // A sandbox whose agent had already exited when we attached (it produced no
+      // output and ended at once) must not eject the user from teleport. Drop back
+      // to the sidebar instead: the spent PTY was cleared, so re-selecting the
+      // sandbox relaunches its agent fresh — or they can switch, delete, or exit.
+      if (outcome === 'ended' && session.wasDeadOnArrival()) {
+        current = null;
+        stoppedView = null;
+        continue;
+      }
+
+      // 'detached' (x) or 'ended' (an agent the user was using exited) end the run.
       if (current) {
         endMsg =
           outcome === 'detached'

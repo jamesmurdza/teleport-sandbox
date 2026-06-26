@@ -194,6 +194,10 @@ export class TeleportSession {
    * silently lost.
    */
   private pendingOutcome: AttachOutcome | null = null;
+  /** Set true once the attached agent emits any output (see wasDeadOnArrival). */
+  private sawAgentOutput = false;
+  /** Whether the last attach ended dead-on-arrival (agent already gone). */
+  private endedDead = false;
   private readonly stdin = process.stdin;
   private wasRaw = false;
 
@@ -204,6 +208,16 @@ export class TeleportSession {
   /** Shows a centered notice in the agent area (e.g. while a switch connects). */
   connecting(label: string): void {
     this.compositor?.resetAgent(label);
+  }
+
+  /**
+   * True when the most recent attach ended "dead on arrival": the agent's PTY
+   * resolved the instant we connected without emitting a single byte — i.e. its
+   * process had already exited before we attached. The loop uses this to keep
+   * teleport open (drop to the sidebar) instead of quitting over one dead sandbox.
+   */
+  wasDeadOnArrival(): boolean {
+    return this.endedDead;
   }
 
   /** Queues the new-sandbox flow to run as soon as the session UI is up. */
@@ -293,12 +307,19 @@ export class TeleportSession {
     else compositor.closeSidebar();
 
     const size = compositor.agentSize();
+    // Track whether the agent emits anything: a live agent repaints (especially
+    // after the SIGWINCH nudge below); an already-exited one stays silent. That
+    // distinguishes "the user quit the agent" from "the agent was already dead".
+    this.sawAgentOutput = false;
     const { pty, fresh } = await attachPty(spec.sandbox, {
       cwd: spec.cwd,
       envs,
       cols: size.cols,
       rows: size.rows,
-      onData: (data) => compositor.feed(data),
+      onData: (data) => {
+        this.sawAgentOutput = true;
+        compositor.feed(data);
+      },
     });
     this.currentPty = pty;
 
@@ -319,6 +340,17 @@ export class TeleportSession {
     // server-side so a reconnect re-attaches to it. The compositor stays alive.
     await pty.disconnect().catch(() => {});
     this.currentPty = null;
+
+    // Dead-on-arrival: the agent PTY ended immediately and never produced a byte,
+    // so its process had already exited before we attached (a previously quit or
+    // crashed agent). Clear the spent PTY session so the *next* attach recreates it
+    // and relaunches the agent fresh, and flag it so the loop keeps teleport open
+    // instead of exiting the whole app. (Safe: wait() already resolved, so the
+    // session is genuinely gone — we're only cleaning up.)
+    this.endedDead = result === 'ended' && !this.sawAgentOutput;
+    if (this.endedDead) {
+      await spec.sandbox.process.killPtySession(PTY_SESSION_ID).catch(() => {});
+    }
     return result;
   }
 
