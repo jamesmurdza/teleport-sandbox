@@ -17,14 +17,14 @@ test('displayBranch reduces teleport working branches to the base', () => {
   assert.equal(displayBranch('my-own-branch'), 'my-own-branch');
 });
 
-test('statusSegments builds left id/agent and right branch/live/note', () => {
-  const { left, right } = statusSegments(info, '✓ pushed');
+test('statusSegments builds left id/agent and right branch/note (no push status)', () => {
+  const { left, right } = statusSegments(info);
   assert.equal(left, '⚡ 6c73784c  codex');
-  assert.equal(right, '↟ main  ·  ✓ pushed  ·  Ctrl-] sidebar');
+  assert.equal(right, '↟ main  ·  Ctrl-] sidebar');
 });
 
-test('statusSegments shows just the Ctrl-] note when branch/live are empty', () => {
-  const { right } = statusSegments({ shortId: 'a', agent: 'claude' }, '');
+test('statusSegments shows just the Ctrl-] note when there is no branch', () => {
+  const { right } = statusSegments({ shortId: 'a', agent: 'claude' });
   assert.equal(right, 'Ctrl-] sidebar');
 });
 
@@ -48,8 +48,8 @@ test('layoutBar truncates the left segment when even it does not fit', () => {
 });
 
 test('renderStatusBar wraps in SGR and the visible text matches the plain layout', () => {
-  const plain = renderStatusBar(info, 'x', 60, { color: false });
-  const styled = renderStatusBar(info, 'x', 60);
+  const plain = renderStatusBar(info, 60, { color: false });
+  const styled = renderStatusBar(info, 60);
   assert.equal(width(plain), 60);
   // Strip SGR and compare to the plain version.
   // eslint-disable-next-line no-control-regex

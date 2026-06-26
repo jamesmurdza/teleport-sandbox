@@ -38,13 +38,9 @@ export function displayBranch(branch: string): string {
 }
 
 /** The plain (un-styled) left and right segments of the bar. */
-export function statusSegments(info: BarInfo, live: string): { left: string; right: string } {
+export function statusSegments(info: BarInfo): { left: string; right: string } {
   const left = `⚡ ${info.shortId}  ${info.agent}`;
-  const right = [
-    info.branch ? `↟ ${displayBranch(info.branch)}` : '',
-    live.trim(),
-    'Ctrl-] sidebar',
-  ]
+  const right = [info.branch ? `↟ ${displayBranch(info.branch)}` : '', 'Ctrl-] sidebar']
     .filter(Boolean)
     .join('  ·  ');
   return { left, right };
@@ -76,13 +72,8 @@ export function layoutBar(left: string, right: string, cols: number): string {
  * contrasting bar in both light and dark mode — instead of a hardcoded colour.
  * The returned string has no trailing newline; the caller positions it.
  */
-export function renderStatusBar(
-  info: BarInfo,
-  live: string,
-  cols: number,
-  opts: { color?: boolean } = {},
-): string {
-  const { left, right } = statusSegments(info, live);
+export function renderStatusBar(info: BarInfo, cols: number, opts: { color?: boolean } = {}): string {
+  const { left, right } = statusSegments(info);
   const line = layoutBar(left, right, cols);
   if (opts.color === false) return line;
   return `${ESC}[7m${line}${ESC}[27m`;

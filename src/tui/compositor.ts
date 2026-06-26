@@ -598,7 +598,7 @@ export class Compositor {
     }
 
     // Status bar on the reserved bottom row (full width).
-    const barText = renderStatusBar(this.bar, this.statusLine(), this.cols);
+    const barText = renderStatusBar(this.bar, this.cols);
     if (barText !== this.prevBar) {
       out += `${ESC}[${this.rows};1H${barText}`;
       this.prevBar = barText;
@@ -622,14 +622,6 @@ export class Compositor {
     if (out) this.opts.write(out);
   }
 
-  /** The live-status segment, with a scrollback hint when scrolled up. */
-  private statusLine(): string {
-    if (this.scrollOffset > 0) {
-      const hint = `SCROLLBACK ↑${this.scrollOffset} · type to resume`;
-      return this.live ? `${hint}  ·  ${this.live}` : hint;
-    }
-    return this.live;
-  }
 
   /** Jumps the viewport back to the live bottom. */
   follow(): void {
