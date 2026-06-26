@@ -194,6 +194,10 @@ export class TeleportSession {
    * silently lost.
    */
   private pendingOutcome: AttachOutcome | null = null;
+  /** Set true once the attached agent emits any output (see wasDeadOnArrival). */
+  private sawAgentOutput = false;
+  /** Whether the last attach ended dead-on-arrival (agent already gone). */
+  private endedDead = false;
   private readonly stdin = process.stdin;
   private wasRaw = false;
 
@@ -204,6 +208,16 @@ export class TeleportSession {
   /** Shows a centered notice in the agent area (e.g. while a switch connects). */
   connecting(label: string): void {
     this.compositor?.resetAgent(label);
+  }
+
+  /**
+   * True when the most recent attach ended "dead on arrival": the agent's PTY
+   * resolved the instant we connected without emitting a single byte — i.e. its
+   * process had already exited before we attached. The loop uses this to keep
+   * teleport open (drop to the sidebar) instead of quitting over one dead sandbox.
+   */
+  wasDeadOnArrival(): boolean {
+    return this.endedDead;
   }
 
   /** Queues the new-sandbox flow to run as soon as the session UI is up. */
@@ -274,6 +288,9 @@ export class TeleportSession {
   async attach(spec: AttachSpec): Promise<AttachOutcome> {
     const compositor = this.ensureCompositor(spec.bar);
     this.listProvider = spec.listSandboxes;
+    // The user may have already picked a different sandbox before we got here —
+    // don't bother loading this one; bail so the loop catches up to the latest.
+    if (this.supersededBy(spec)) return 'switch';
     this.shownId = spec.sandbox.id;
     this.intendedId = spec.sandbox.id;
     spec.bindStatus?.((text) => compositor.setLiveStatus(text));
@@ -288,18 +305,34 @@ export class TeleportSession {
     }
 
     const envs = await this.buildEnv(spec);
+    if (this.supersededBy(spec)) return 'switch';
 
     if (spec.openSidebar) compositor.openSidebar();
     else compositor.closeSidebar();
 
     const size = compositor.agentSize();
+    // Track whether the agent emits anything: a live agent repaints (especially
+    // after the SIGWINCH nudge below); an already-exited one stays silent. That
+    // distinguishes "the user quit the agent" from "the agent was already dead".
+    this.sawAgentOutput = false;
     const { pty, fresh } = await attachPty(spec.sandbox, {
       cwd: spec.cwd,
       envs,
       cols: size.cols,
       rows: size.rows,
-      onData: (data) => compositor.feed(data),
+      onData: (data) => {
+        // If a newer switch is queued, ignore late output from the sandbox we're
+        // abandoning so it can't repaint over the new target's "connecting…" notice.
+        if (this.supersededBy(spec)) return;
+        this.sawAgentOutput = true;
+        compositor.feed(data);
+      },
     });
+    // The selection moved on while the PTY was connecting — drop it and catch up.
+    if (this.supersededBy(spec)) {
+      await pty.disconnect().catch(() => {});
+      return 'switch';
+    }
     this.currentPty = pty;
 
     if (fresh) {
@@ -313,12 +346,31 @@ export class TeleportSession {
 
     void this.refresh();
 
+    // Last check before we park on this sandbox: if a switch arrived during the
+    // resize/launch nudges above, abandon it now so we don't wait on a stale PTY.
+    if (this.supersededBy(spec)) {
+      await pty.disconnect().catch(() => {});
+      this.currentPty = null;
+      return 'switch';
+    }
+
     const result = await this.waitOutcome(pty);
 
     // Drop the WebSocket *without* killing the PTY — the agent keeps running
     // server-side so a reconnect re-attaches to it. The compositor stays alive.
     await pty.disconnect().catch(() => {});
     this.currentPty = null;
+
+    // Dead-on-arrival: the agent PTY ended immediately and never produced a byte,
+    // so its process had already exited before we attached (a previously quit or
+    // crashed agent). Clear the spent PTY session so the *next* attach recreates it
+    // and relaunches the agent fresh, and flag it so the loop keeps teleport open
+    // instead of exiting the whole app. (Safe: wait() already resolved, so the
+    // session is genuinely gone — we're only cleaning up.)
+    this.endedDead = result === 'ended' && !this.sawAgentOutput;
+    if (this.endedDead) {
+      await spec.sandbox.process.killPtySession(PTY_SESSION_ID).catch(() => {});
+    }
     return result;
   }
 
@@ -474,12 +526,18 @@ export class TeleportSession {
           resolve(o);
         };
         this.settle = settle; // sidebar callbacks resolve this wait
-        // Replay an action queued while no wait was active.
+        // Replay an action queued while no wait was active. A queued 'switch' is
+        // only valid while its target is still pending in switchTarget: the loop
+        // clears that once it commits to a sandbox, so a leftover 'switch' (e.g.
+        // one already consumed by an attach's mid-load bail) would otherwise fire
+        // here with no target and wrongly end the run. Drop it in that case.
         if (this.pendingOutcome) {
           const o = this.pendingOutcome;
           this.pendingOutcome = null;
-          settle(o);
-          return;
+          if (o !== 'switch' || this.deps.switchTarget.id) {
+            settle(o);
+            return;
+          }
         }
         pty
           ?.wait()
@@ -513,19 +571,16 @@ export class TeleportSession {
   private onSelect(item: SidebarItem): void {
     if (this.previewTimer) clearTimeout(this.previewTimer);
     this.previewTimer = null;
-    // The shown sandbox: close the sidebar to interact with it.
-    if (item.id === this.shownId && !this.isStopped(item)) {
-      this.compositor?.toggleSidebar();
-      return;
-    }
-    // Enter starts a stopped sandbox; running ones just attach and land.
-    this.requestSwitch(item, { start: this.isStopped(item), openSidebar: false });
+    // Enter switches to the sandbox (starting it if stopped) and keeps the sidebar
+    // open — it never closes the sidebar. Use → (or Tab) to hand focus to the agent.
+    this.requestSwitch(item, { start: this.isStopped(item), openSidebar: true });
   }
 
   /** Reflects the target in the chrome instantly, then asks the caller to swap. */
   private requestSwitch(item: SidebarItem, opts: { start: boolean; openSidebar: boolean }): void {
     if (item.id === this.intendedId && !this.isStopped(item)) {
-      // Already shown (or mid-switch) and running → just (un)collapse the sidebar.
+      // Already shown (or mid-switch) and running → nothing to swap. Only collapse
+      // if a caller explicitly asks to (none do today; Enter keeps it open).
       if (!opts.openSidebar) this.compositor?.closeSidebar();
       return;
     }
@@ -533,10 +588,38 @@ export class TeleportSession {
     // dedup/settle against the latest target, not the one still attaching.
     this.intendedId = item.id;
     this.compositor?.setBar(barFromItem(item));
+    // Instant feedback: clear the agent pane and show the target's placeholder
+    // right away, so the view appears to change immediately instead of lingering
+    // on the current sandbox (or the one still loading) until it catches up.
+    this.compositor?.resetAgent(this.switchPlaceholder(item, opts.start));
     this.deps.switchTarget.id = item.id;
     this.deps.switchTarget.openSidebar = opts.openSidebar;
     this.deps.switchTarget.start = opts.start;
+    // If an attach is parked waiting, this resolves it so the loop swaps now. If an
+    // attach is still loading, it's queued (and that attach also bails at its next
+    // checkpoint via switchTarget) — either way we end up on the latest selection.
     this.requestOutcome('switch');
+  }
+
+  /**
+   * True when the user has queued a switch to a *different* sandbox than `spec`
+   * while we were getting here / loading it. The loop clears `switchTarget.id`
+   * before it commits to attaching a sandbox, so a non-null id that doesn't match
+   * `spec` means a newer selection landed mid-flight — bail and let the loop catch
+   * up to it instead of finishing this (now-unwanted) load.
+   */
+  private supersededBy(spec: AttachSpec): boolean {
+    const pending = this.deps.switchTarget.id;
+    return pending != null && pending !== spec.sandbox.id;
+  }
+
+  /** The centered placeholder shown the instant a switch to `item` is requested. */
+  private switchPlaceholder(item: SidebarItem, start: boolean): string {
+    const short = item.id.slice(0, 8);
+    if (this.isStopped(item)) {
+      return start ? `starting ${short}…` : `⏸  ${short} is stopped — press Return to start it`;
+    }
+    return `connecting to ${short}…`;
   }
 
   /** Shows a read-only info panel for the selected sandbox in the agent pane. */

@@ -87,8 +87,8 @@ export interface CompositorOptions {
 
 /** Keybinding legend shown in the sidebar footer (two rows so it isn't clipped). */
 const SIDEBAR_LEGEND = ['↵ open   n new   i info', 'g web   d del   x exit'];
-/** Footer shown when focus is on the agent pane (the hotkeys type into it). */
-const SIDEBAR_AGENT_LEGEND = ['▶ typing to the agent', '← back to the sidebar'];
+/** No footer when focus is on the agent pane — the hotkeys type into it. */
+const SIDEBAR_AGENT_LEGEND: string[] = [];
 
 export class Compositor {
   private term: InstanceType<typeof Terminal>;
@@ -110,6 +110,13 @@ export class Compositor {
   private sidebarFocused = true;
   private sidebarItems: SidebarItem[] = [];
   private sidebarSelected = 0;
+  /**
+   * Id of the attached sandbox the selection was last synced to. When the
+   * attached sandbox changes (e.g. one you just created, or a delete handing off
+   * to a neighbour) the selection jumps onto it, instead of staying stuck on the
+   * previously-highlighted row.
+   */
+  private lastCurrentId: string | null = null;
   private prevSidebar: string[] | null = null;
   /** Sandboxes deleted locally, filtered out until the server stops reporting them. */
   private readonly removedIds = new Set<string>();
@@ -396,9 +403,21 @@ export class Compositor {
   private applyList(items: SidebarItem[]): void {
     const prevId = this.sidebarItems[this.sidebarSelected]?.id;
     this.sidebarItems = items;
-    let idx = prevId ? items.findIndex((it) => it.id === prevId) : -1;
+    const current = items.find((it) => it.current) ?? null;
+    let idx = -1;
+    // When the *attached* sandbox changes (a freshly created one, or a delete
+    // handing off to a neighbour), pull the selection onto it — the highlighted
+    // row should track what we're now attached to. During live preview the
+    // attached sandbox already follows the selection, so this is a no-op and never
+    // fights the user's navigation. Otherwise keep the selection on its sandbox.
+    if (current && current.id !== this.lastCurrentId) {
+      idx = items.indexOf(current);
+    } else if (prevId) {
+      idx = items.findIndex((it) => it.id === prevId);
+    }
     if (idx < 0) idx = Math.min(this.sidebarSelected, items.length - 1);
     this.sidebarSelected = Math.max(0, idx);
+    if (current) this.lastCurrentId = current.id;
     if (this.sidebarOpen) this.scheduleRender();
   }
 
@@ -612,7 +631,10 @@ export class Compositor {
 
     // Sidebar band on the left, diffed line by line.
     if (w > 0) {
-      const tabHint = this.sidebarFocused ? '→ agent' : '← list';
+      // A single arrow at the top-right shows which way Tab / ←→ moves focus:
+      // → (hand off to the agent) when the sidebar is focused, ← (back to the list)
+      // when the agent is.
+      const tabHint = this.sidebarFocused ? '→' : '←';
       const lines = renderSidebar(this.sidebarItems, this.sidebarSelected, w, agentRows, this.sidebarFooter(), {
         focused: this.sidebarFocused,
         tabHint,

@@ -35,6 +35,20 @@ function log(msg: string): void {
   process.stdout.write(`teleport: ${msg}\n`);
 }
 
+/**
+ * Condenses an error into a short, single-line message fit for the agent pane.
+ * Daytona errors are long, quoted, and multi-clause (e.g. "not found: sandbox
+ * container not found: …"); collapse whitespace, strip wrapping quotes, and clip.
+ */
+function oneLine(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const clean = msg
+    .replace(/\s+/g, ' ')
+    .replace(/^"+|"+$/g, '')
+    .trim();
+  return clean.length > 120 ? `${clean.slice(0, 117)}…` : clean;
+}
+
 export interface StartOptions {
   command: string;
   args: string[];
@@ -296,7 +310,15 @@ export async function openSandboxes(): Promise<void> {
   }
   const target = live.find((s) => RUNNING_STATES.has(s.state)) ?? live[0];
   log(`connecting to ${target.id.slice(0, 8)}…`);
-  const first = await prepareExisting(target, true);
+  // The chosen sandbox may have been deleted out from under us (container gone).
+  // Never crash on that — open the sidebar so the user can pick another or exit.
+  let first: Prepared | null = null;
+  try {
+    first = await prepareExisting(target, true);
+  } catch (err) {
+    await runSessionLoop(null, false, `couldn't reach ${target.id.slice(0, 8)} — ${oneLine(err)}`);
+    return;
+  }
   await runSessionLoop(first);
 }
 
@@ -362,7 +384,7 @@ async function prepareExisting(session: Session, openSidebar: boolean): Promise<
  */
 const IDLE_MESSAGE = 'No sandbox attached — Ctrl-] for the menu · x to exit';
 
-async function runSessionLoop(first: Prepared | null, autoNew = false): Promise<void> {
+async function runSessionLoop(first: Prepared | null, autoNew = false, initialNote = ''): Promise<void> {
   const deps: SessionDeps = {
     switchTarget: {},
     deleteSandbox: async (id) => {
@@ -373,21 +395,34 @@ async function runSessionLoop(first: Prepared | null, autoNew = false): Promise<
   if (autoNew) session.queueNew(); // open the new-sandbox menu as soon as the UI is up
   let current = first;
   let stoppedView: Session | null = null; // a stopped sandbox being previewed
+  let idleNote: string | null = initialNote || null; // one-shot message for the idle view
   let endMsg = '';
   try {
     for (;;) {
       // Attached to a sandbox; previewing a stopped one; or idle (no agent).
       let outcome;
       if (current) {
+        const attached = current;
         try {
-          outcome = await session.attach(current.spec);
+          outcome = await session.attach(attached.spec);
+        } catch (err) {
+          // Attaching failed — most often the sandbox was deleted and its
+          // container is gone, but also any transient API/connection error. Never
+          // crash the whole app: drop to the sidebar with a note so the user can
+          // pick another sandbox or exit. (Uses the captured `attached` ref so the
+          // finally never dereferences a now-null `current`.)
+          current = null;
+          stoppedView = null;
+          idleNote = `couldn't attach ${attached.spec.sandbox.id.slice(0, 8)} — ${oneLine(err)}`;
+          continue;
         } finally {
-          current.autopush?.stop();
+          attached.autopush?.stop();
         }
       } else if (stoppedView) {
         outcome = await session.showStopped(sidebarItemOf(stoppedView), () => listSandboxItems(''));
       } else {
-        outcome = await session.idle(IDLE_MESSAGE, () => listSandboxItems(''));
+        outcome = await session.idle(idleNote ?? IDLE_MESSAGE, () => listSandboxItems(''));
+        idleNote = null;
       }
 
       if (outcome === 'switch' && deps.switchTarget.id) {
@@ -410,8 +445,16 @@ async function runSessionLoop(first: Prepared | null, autoNew = false): Promise<
               ? `connecting to ${id.slice(0, 8)}…`
               : `starting ${id.slice(0, 8)}…`,
           );
-          current = await prepareExisting(next, openSidebar);
-          stoppedView = null;
+          try {
+            current = await prepareExisting(next, openSidebar);
+            stoppedView = null;
+          } catch (err) {
+            // Starting/preparing the target failed (e.g. it was just deleted).
+            // Stay in teleport — drop to the sidebar with a note.
+            current = null;
+            stoppedView = null;
+            idleNote = `couldn't reach ${id.slice(0, 8)} — ${oneLine(err)}`;
+          }
         } else {
           // Navigated to a stopped sandbox → show the "press Return" notice.
           current = null;
@@ -443,7 +486,17 @@ async function runSessionLoop(first: Prepared | null, autoNew = false): Promise<
         continue;
       }
 
-      // 'detached' (x) or 'ended' (agent exited) end the run.
+      // A sandbox whose agent had already exited when we attached (it produced no
+      // output and ended at once) must not eject the user from teleport. Drop back
+      // to the sidebar instead: the spent PTY was cleared, so re-selecting the
+      // sandbox relaunches its agent fresh — or they can switch, delete, or exit.
+      if (outcome === 'ended' && session.wasDeadOnArrival()) {
+        current = null;
+        stoppedView = null;
+        continue;
+      }
+
+      // 'detached' (x) or 'ended' (an agent the user was using exited) end the run.
       if (current) {
         endMsg =
           outcome === 'detached'

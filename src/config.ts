@@ -87,8 +87,15 @@ export const AGENTS: Record<string, AgentDef> = {
     // ~/.claude.json (account + onboarding + trust/bypass acceptance) is written
     // by prepareClaudeConfig() — merged locally and uploaded, so it does not
     // depend on a node runtime existing in the sandbox.
-    // Start Claude in fullscreen (no-flicker) mode.
-    env: { CLAUDE_CODE_NO_FLICKER: '1' },
+    env: {
+      // Start Claude in fullscreen (no-flicker) mode.
+      CLAUDE_CODE_NO_FLICKER: '1',
+      // The sandbox's global npm prefix isn't writable, so Claude's auto-updater
+      // can't run and warns on every launch ("Can't auto-update: npm global folder
+      // isn't writable"). The sandbox image pins the version, so just turn the
+      // updater off to silence the warning.
+      DISABLE_AUTOUPDATER: '1',
+    },
   },
   codex: {
     name: 'codex',
