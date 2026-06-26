@@ -1,14 +1,19 @@
 /**
  * High-level orchestration for starting a new sandbox and reconnecting to an
  * existing one: ties together repo inspection, the credential modal, sandbox
- * creation, repo clone + teleport branch, auto-push, and the interactive attach.
+ * creation, repo clone + teleport branch, and auto-push. A single
+ * `runSessionLoop` then drives one persistent `TeleportSession` (one compositor),
+ * swapping sandboxes in place on a switch so there's no teardown/flash.
  */
-import { knownAgent, yoloFlagFor, SANDBOX_REPO_PATH } from './config.js';
+import { knownAgent, yoloFlagFor, KNOWN_AGENTS, SANDBOX_REPO_PATH } from './config.js';
 import {
   createSandbox,
   ensureStarted,
   getSession,
+  listSessions,
   tagBranch,
+  DEAD_STATES,
+  RUNNING_STATES,
   type Session,
 } from './daytona.js';
 import { inspectLocalRepo } from './local-git.js';
@@ -21,8 +26,9 @@ import { join } from 'node:path';
 import { resolveGitHubToken } from './git/auth.js';
 import { setupRepo } from './git/repo.js';
 import { AutoPush, type PushStatus } from './git/autopush.js';
-import { attach, setLiveStatus, type AttachOutcome } from './session.js';
-import type { BarInfo } from './tui/tmux.js';
+import { TeleportSession, statusBridge, type AttachSpec, type SessionDeps } from './session.js';
+import type { BarInfo } from './tui/statusbar.js';
+import type { SidebarItem } from './tui/sidebar.js';
 import { overlayMenu, overlayConfirm } from './tui/overlay.js';
 
 function log(msg: string): void {
@@ -36,8 +42,80 @@ export interface StartOptions {
   yolo?: boolean;
 }
 
-/** Full flow for `teleport <command>`. */
-export async function startNew(opts: StartOptions): Promise<AttachOutcome> {
+/** A prepared attachment: the spec plus its auto-push handle (stopped on detach). */
+interface Prepared {
+  spec: AttachSpec;
+  autopush?: AutoPush;
+}
+
+/**
+ * How the new-sandbox flow presents its modals and progress. At startup it uses
+ * the bare terminal (fullscreen overlays, stdout logging); in-session every modal
+ * renders *inside the agent pane* via the compositor, so the sidebar and status
+ * bar are never disturbed, and progress shows in the agent placeholder.
+ */
+interface Present {
+  note(msg: string): void;
+  confirm(question: string): Promise<boolean>;
+  menu<T>(title: string, items: { label: string; detail?: string; value: T }[]): Promise<T | null>;
+}
+
+const TERMINAL_PRESENT: Present = {
+  note: (m) => log(m),
+  confirm: (q) => overlayConfirm(q, { fullscreen: true }),
+  menu: (title, items) => overlayMenu(title, items, { fullscreen: true }),
+};
+
+function sessionPresent(session: TeleportSession): Present {
+  return {
+    note: (m) => session.connecting(m),
+    confirm: (q) => session.confirm(q),
+    menu: (title, items) => session.menu(title, items),
+  };
+}
+
+/** Agents offered in the in-session "new sandbox" picker. */
+const NEW_AGENTS = KNOWN_AGENTS;
+
+/** Returns the live sandbox list as sidebar items, marking the attached one.
+ * Sandboxes being torn down (or errored) are dropped so a just-deleted one
+ * disappears from the sidebar immediately instead of lingering. */
+async function listSandboxItems(currentId: string): Promise<SidebarItem[]> {
+  const sessions = await listSessions();
+  return sessions
+    .filter((s) => s.id === currentId || !DEAD_STATES.has(s.state))
+    .map((s) => ({
+      id: s.id,
+      agent: s.command || s.agent || '?',
+      state: s.state || '?',
+      current: s.id === currentId,
+      repo: s.repo || undefined,
+      branch: s.branch || undefined,
+      createdAt: s.createdAt || undefined,
+    }));
+}
+
+/** Maps one session to a sidebar item (used for the stopped-preview view). */
+function sidebarItemOf(s: Session): SidebarItem {
+  return {
+    id: s.id,
+    agent: s.command || s.agent || '?',
+    state: s.state || '?',
+    current: false,
+    repo: s.repo || undefined,
+    branch: s.branch || undefined,
+    createdAt: s.createdAt || undefined,
+  };
+}
+
+/** Full flow for `teleport <command>`: create the sandbox, then run the session. */
+export async function startNew(opts: StartOptions): Promise<void> {
+  const first = await prepareNew(opts);
+  if (first) await runSessionLoop(first);
+}
+
+/** Builds the first attachment for a brand-new sandbox, or null if cancelled. */
+async function prepareNew(opts: StartOptions, present: Present = TERMINAL_PRESENT): Promise<Prepared | null> {
   const cwd = process.cwd();
   const repo = await inspectLocalRepo(cwd);
 
@@ -48,56 +126,47 @@ export async function startNew(opts: StartOptions): Promise<AttachOutcome> {
 
   const hasRepo = !!(repo && repo.originUrl);
   if (!hasRepo) {
-    const ok = await overlayConfirm(
-      'Not in a git repo. Create a new blank sandbox with no repo?',
-      { fullscreen: true },
-    );
+    const ok = await present.confirm('Not in a git repo. Create a new blank sandbox with no repo?');
     if (!ok) {
-      log('cancelled.');
-      return 'ended';
+      present.note('cancelled.');
+      return null;
     }
-  } else if (repo) {
-    if (repo.dirty || repo.ahead > 0) {
-      const bits = [
-        repo.dirty ? 'uncommitted changes' : null,
-        repo.ahead > 0 ? `${repo.ahead} unpushed commit(s)` : null,
-      ]
-        .filter(Boolean)
-        .join(' and ');
-      log(`warning: ${bits} won't be in the sandbox (it clones from origin).`);
-    }
+  } else if (repo && (repo.dirty || repo.ahead > 0)) {
+    const bits = [
+      repo.dirty ? 'uncommitted changes' : null,
+      repo.ahead > 0 ? `${repo.ahead} unpushed commit(s)` : null,
+    ]
+      .filter(Boolean)
+      .join(' and ');
+    present.note(`warning: ${bits} won't be in the sandbox (it clones from origin).`);
   }
 
   // Choose credentials (modal) up front; applied after the sandbox exists.
-  // Escape (null) quits; the "Neither" option ('none') proceeds without creds.
+  // Escape (null) quits; the "Skip" option ('none') proceeds without creds.
   const agent = knownAgent(opts.command);
   const sources = agent ? await discoverSources(agent) : [];
   type CredChoice = (typeof sources)[number] | 'none';
   let chosen: (typeof sources)[number] | null = null;
   if (sources.length > 0) {
-    const picked = await overlayMenu<CredChoice>(
-      `${opts.command} credentials`,
-      [
-        ...sources.map((s) => ({ label: s.label, detail: s.detail, value: s as CredChoice })),
-        { label: 'Skip', value: 'none' as CredChoice },
-      ],
-      { fullscreen: true },
-    );
+    const picked = await present.menu<CredChoice>(`${opts.command} credentials`, [
+      ...sources.map((s) => ({ label: s.label, detail: s.detail, value: s as CredChoice })),
+      { label: 'Skip', value: 'none' as CredChoice },
+    ]);
     if (picked === null) {
-      log('cancelled.');
-      return 'ended';
+      present.note('cancelled.');
+      return null;
     }
     chosen = picked === 'none' ? null : picked;
   }
 
-  log(`creating sandbox on the background-agents snapshot…`);
+  present.note('creating sandbox…');
   const sandbox = await createSandbox({
     command: runCommand,
     agent: opts.command,
     repoSlug: repo?.slug ?? null,
     baseBranch: repo?.branch ?? null,
   });
-  log(`sandbox ${sandbox.id} created; starting…`);
+  present.note(`sandbox ${sandbox.id.slice(0, 8)} created; starting…`);
   await ensureStarted(sandbox);
 
   // Apply credential choice now that we have a sandbox. Start from the agent's
@@ -106,13 +175,13 @@ export async function startNew(opts: StartOptions): Promise<AttachOutcome> {
   if (chosen) {
     const result = await applyCredential(sandbox, chosen.payload);
     env = { ...env, ...result.env };
-    log(`${opts.command} credentials: ${result.summary}`);
-    if (!result.ok) log('the agent may prompt you to log in because the credential file did not verify.');
+    present.note(`${opts.command} credentials: ${result.summary}`);
   }
 
   // Clone repo + create teleport branch + start auto-push.
   let cwdInSandbox: string | undefined;
   let autopush: AutoPush | undefined;
+  const status = statusBridge();
   const bar: BarInfo = {
     shortId: sandbox.id.slice(0, 8),
     agent: opts.command,
@@ -122,9 +191,10 @@ export async function startNew(opts: StartOptions): Promise<AttachOutcome> {
   if (hasRepo && repo) {
     const creds = await resolveGitHubToken();
     if (!creds) {
-      log('warning: no GitHub token found — cloning may fail for private repos and auto-push is disabled.');
+      present.note('warning: no GitHub token — clone may fail for private repos; auto-push disabled.');
     }
     try {
+      present.note('cloning repo…');
       const setup = await setupRepo(sandbox, {
         originUrl: repo.originUrl!,
         baseBranch: repo.branch ?? 'main',
@@ -133,18 +203,17 @@ export async function startNew(opts: StartOptions): Promise<AttachOutcome> {
       cwdInSandbox = setup.repoPath;
       bar.branch = setup.branch;
       await tagBranch(sandbox, setup.branch);
-      log(`cloned ${repo.slug} and checked out ${setup.branch}.`);
       if (creds) {
         autopush = new AutoPush(sandbox, {
           repoPath: setup.repoPath,
           branch: setup.branch,
           creds,
-          onStatus: (s, d) => void setLiveStatus(sandbox, pushLabel(s, d)),
+          onStatus: (s, d) => status.update(pushLabel(s, d)),
         });
         autopush.start();
       }
     } catch (err) {
-      log(`warning: repo setup failed: ${err instanceof Error ? err.message : String(err)}`);
+      present.note(`warning: repo setup failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -157,7 +226,17 @@ export async function startNew(opts: StartOptions): Promise<AttachOutcome> {
     });
   }
 
-  return runInteractive(sandbox, runCommand, cwdInSandbox, env, bar, autopush);
+  const spec: AttachSpec = {
+    sandbox,
+    command: runCommand,
+    cwd: cwdInSandbox,
+    env,
+    bar,
+    bindStatus: status.bind,
+    listSandboxes: () => listSandboxItems(sandbox.id),
+    openSidebar: false,
+  };
+  return { spec, autopush };
 }
 
 /**
@@ -203,9 +282,30 @@ async function prepareClaudeConfig(
   }
 }
 
-/** Full flow for reconnecting to an existing sandbox. */
-export async function reconnect(session: Session): Promise<AttachOutcome> {
-  log(`reconnecting to ${session.id} (${session.state})…`);
+/**
+ * `teleport` with no args: attach to the most-recent sandbox with the sidebar
+ * open as the entry menu, or — when there are none — open the menu idle so it
+ * still works (and you can create one).
+ */
+export async function openSandboxes(): Promise<void> {
+  const live = (await listSessions()).filter((s) => !DEAD_STATES.has(s.state));
+  if (live.length === 0) {
+    // No sandboxes yet → open the new-sandbox menu straight away.
+    await runSessionLoop(null, true);
+    return;
+  }
+  const target = live.find((s) => RUNNING_STATES.has(s.state)) ?? live[0];
+  log(`connecting to ${target.id.slice(0, 8)}…`);
+  const first = await prepareExisting(target, true);
+  await runSessionLoop(first);
+}
+
+/**
+ * Builds an attachment for an existing sandbox. Silent (no terminal logging): it
+ * runs both for the first connect and mid-session switches, and the latter happen
+ * while the compositor owns the alt screen.
+ */
+async function prepareExisting(session: Session, openSidebar: boolean): Promise<Prepared> {
   await ensureStarted(session.sandbox);
 
   const bar: BarInfo = {
@@ -226,6 +326,7 @@ export async function reconnect(session: Session): Promise<AttachOutcome> {
   }
 
   let autopush: AutoPush | undefined;
+  const status = statusBridge();
   const cwdInSandbox = session.repo ? SANDBOX_REPO_PATH : undefined;
   if (session.repo && session.branch) {
     const creds = await resolveGitHubToken();
@@ -234,44 +335,156 @@ export async function reconnect(session: Session): Promise<AttachOutcome> {
         repoPath: SANDBOX_REPO_PATH,
         branch: session.branch,
         creds,
-        onStatus: (s, d) => void setLiveStatus(session.sandbox, pushLabel(s, d)),
+        onStatus: (s, d) => status.update(pushLabel(s, d)),
       });
       autopush.start();
     }
   }
 
-  return runInteractive(session.sandbox, session.command, cwdInSandbox, env, bar, autopush);
+  const spec: AttachSpec = {
+    sandbox: session.sandbox,
+    command: session.command,
+    cwd: cwdInSandbox,
+    env,
+    bar,
+    bindStatus: status.bind,
+    listSandboxes: () => listSandboxItems(session.sandbox.id),
+    openSidebar,
+  };
+  return { spec, autopush };
 }
 
-async function runInteractive(
-  sandbox: import('@daytonaio/sdk').Sandbox,
-  command: string,
-  cwd: string | undefined,
-  env: Record<string, string>,
-  bar: BarInfo,
-  autopush?: AutoPush,
-): Promise<AttachOutcome> {
-  const outcome = await attach(sandbox, { command, cwd, env, bar });
-  autopush?.stop();
-  switch (outcome) {
-    case 'switch':
-      log(`switching sandbox (${sandbox.id} keeps running, auto-stops when idle).`);
+/**
+ * Drives one persistent interactive session: a single compositor that the user
+ * can switch sandboxes within. Each 'switch' swaps the attachment in place (no
+ * teardown, no flash); stop/delete/detach/exit end the run. Result messages are
+ * logged only after the terminal is restored.
+ */
+const IDLE_MESSAGE = 'No sandbox attached — Ctrl-] for the menu · x to exit';
+
+async function runSessionLoop(first: Prepared | null, autoNew = false): Promise<void> {
+  const deps: SessionDeps = {
+    switchTarget: {},
+    deleteSandbox: async (id) => {
+      await (await getSession(id)).sandbox.delete();
+    },
+  };
+  const session = new TeleportSession(deps);
+  if (autoNew) session.queueNew(); // open the new-sandbox menu as soon as the UI is up
+  let current = first;
+  let stoppedView: Session | null = null; // a stopped sandbox being previewed
+  let endMsg = '';
+  try {
+    for (;;) {
+      // Attached to a sandbox; previewing a stopped one; or idle (no agent).
+      let outcome;
+      if (current) {
+        try {
+          outcome = await session.attach(current.spec);
+        } finally {
+          current.autopush?.stop();
+        }
+      } else if (stoppedView) {
+        outcome = await session.showStopped(sidebarItemOf(stoppedView), () => listSandboxItems(''));
+      } else {
+        outcome = await session.idle(IDLE_MESSAGE, () => listSandboxItems(''));
+      }
+
+      if (outcome === 'switch' && deps.switchTarget.id) {
+        const id = deps.switchTarget.id;
+        const openSidebar = deps.switchTarget.openSidebar ?? false;
+        const start = deps.switchTarget.start ?? false;
+        deps.switchTarget.id = undefined;
+        deps.switchTarget.openSidebar = undefined;
+        deps.switchTarget.start = undefined;
+        const next = await getSession(id).catch(() => null);
+        if (!next) {
+          current = null;
+          stoppedView = null;
+          continue;
+        }
+        if (RUNNING_STATES.has(next.state) || start) {
+          // Running, or the user pressed Return to start it → attach live.
+          session.connecting(
+            RUNNING_STATES.has(next.state)
+              ? `connecting to ${id.slice(0, 8)}…`
+              : `starting ${id.slice(0, 8)}…`,
+          );
+          current = await prepareExisting(next, openSidebar);
+          stoppedView = null;
+        } else {
+          // Navigated to a stopped sandbox → show the "press Return" notice.
+          current = null;
+          stoppedView = next;
+        }
+        continue;
+      }
+
+      if (outcome === 'new') {
+        const created = await createInSession(session);
+        if (created) {
+          current = created;
+          stoppedView = null;
+        } else if (current) {
+          // Cancelled: re-attach the current sandbox with the sidebar open.
+          const id = current.spec.sandbox.id;
+          current = await getSession(id)
+            .then((s) => prepareExisting(s, true))
+            .catch(() => current);
+        }
+        continue;
+      }
+
+      if (outcome === 'deleted') {
+        // The last sandbox: delete it and drop to idle (the menu keeps working).
+        if (current) await current.spec.sandbox.delete().catch(() => {});
+        current = null;
+        stoppedView = null;
+        continue;
+      }
+
+      // 'detached' (x) or 'ended' (agent exited) end the run.
+      if (current) {
+        endMsg =
+          outcome === 'detached'
+            ? `detached. Reconnect with \`teleport\` (${current.spec.sandbox.id} keeps running, auto-stops when idle).`
+            : `session ended. Remove the sandbox with \`teleport rm ${current.spec.sandbox.id}\`.`;
+      }
       break;
-    case 'detached':
-      log(`detached. Reconnect with \`teleport\` (sandbox ${sandbox.id} keeps running, auto-stops when idle).`);
-      break;
-    case 'stopped':
-      await sandbox.stop().catch((e) => log(`failed to stop: ${e instanceof Error ? e.message : e}`));
-      log(`stopped ${sandbox.id}. Reconnect with \`teleport\` to restart it.`);
-      break;
-    case 'deleted':
-      await sandbox.delete().catch((e) => log(`failed to delete: ${e instanceof Error ? e.message : e}`));
-      log(`deleted ${sandbox.id}.`);
-      break;
-    default:
-      log(`sandbox session ended. Remove the sandbox with \`teleport rm ${sandbox.id}\`.`);
+    }
+  } finally {
+    session.dispose();
+    if (endMsg) log(endMsg);
   }
-  return outcome;
+}
+
+/** Sentinel value for the "custom command" choice in the new-agent picker. */
+const CUSTOM_CHOICE = ' custom';
+
+/** Asks which agent/command to run for a new sandbox (modal in the agent pane). */
+async function pickNewCommand(session: TeleportSession): Promise<string | null> {
+  const choice = await session.menu<string>('New sandbox — choose an agent', [
+    ...NEW_AGENTS.map((a) => ({ label: a, value: a })),
+    { label: 'Custom command…', value: CUSTOM_CHOICE },
+  ]);
+  if (choice === null) return null;
+  if (choice !== CUSTOM_CHOICE) return choice;
+  return session.prompt('Custom command', 'e.g. aider --model gpt-4o');
+}
+
+/** Creates a new sandbox from the in-session sidebar, keeping the chrome up. */
+async function createInSession(session: TeleportSession): Promise<Prepared | null> {
+  const command = await pickNewCommand(session);
+  if (!command) return null;
+  const [cmd, ...args] = command.trim().split(/\s+/);
+  try {
+    const prep = await prepareNew({ command: cmd, args, yolo: true }, sessionPresent(session));
+    if (prep) prep.spec.openSidebar = true; // created from the sidebar → keep it open
+    return prep;
+  } catch (err) {
+    session.connecting(`create failed: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
 }
 
 function pushLabel(status: PushStatus, detail?: string): string {

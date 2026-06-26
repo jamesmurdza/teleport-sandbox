@@ -3,7 +3,7 @@
  * talks to Daytona through this module, so SDK-specific details stay in one place.
  */
 import { Daytona, type Sandbox } from '@daytonaio/sdk';
-import { BASE_SNAPSHOT, LABELS, SANDBOX_PREFIX } from './config.js';
+import { AUTOSTOP_MINUTES, BASE_SNAPSHOT, LABELS, SANDBOX_PREFIX } from './config.js';
 import { sandboxName } from './naming.js';
 
 export type { Sandbox };
@@ -12,6 +12,8 @@ export type { Sandbox };
 export const RUNNING_STATES = new Set(['started']);
 /** States from which a sandbox can be started again. */
 export const STARTABLE_STATES = new Set(['stopped', 'archived']);
+/** Sandboxes that are gone or being torn down — hidden from the live sidebar. */
+export const DEAD_STATES = new Set(['destroying', 'destroyed', 'error']);
 
 let client: Daytona | null = null;
 
@@ -67,7 +69,7 @@ export async function createSandbox(params: CreateSessionParams): Promise<Sandbo
   const name = sandboxName(SANDBOX_PREFIX, slug, suffix);
 
   const sandbox = await daytona().create(
-    { name, snapshot: BASE_SNAPSHOT, labels, autoStopInterval: 30 },
+    { name, snapshot: BASE_SNAPSHOT, labels, autoStopInterval: AUTOSTOP_MINUTES },
     { timeout: 180 },
   );
   return sandbox;

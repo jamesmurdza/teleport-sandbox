@@ -13,15 +13,23 @@ export const BASE_SNAPSHOT = process.env.TELEPORT_SNAPSHOT ?? 'background-agents
 /** Prefix applied to the name of every sandbox teleport creates. */
 export const SANDBOX_PREFIX = process.env.TELEPORT_PREFIX ?? 'teleport';
 
+/**
+ * Minutes of inactivity after which a sandbox auto-stops (0 disables). Sandboxes
+ * restart on reconnect, so idle ones don't sit running. Override with
+ * TELEPORT_AUTOSTOP.
+ */
+export const AUTOSTOP_MINUTES = Number(process.env.TELEPORT_AUTOSTOP ?? 30) || 0;
+
 /** Absolute path inside the sandbox where the repo is cloned. */
 export const SANDBOX_REPO_PATH = '/home/daytona/repo';
 
-/** tmux session name that persists the agent across reconnects. */
-export const TMUX_SESSION = 'teleport';
-/** Path to the generated tmux config inside the sandbox. */
-export const TMUX_CONF_PATH = '/tmp/teleport.tmux';
-/** File the tmux status line reads for live (push) status. */
-export const TMUX_STATUS_FILE = '/tmp/teleport-status';
+/**
+ * Stable id of the persistent Daytona PTY session that runs the agent. Reusing a
+ * fixed id per sandbox is what lets teleport reconnect to the *same* running
+ * agent after a detach — Daytona keeps the PTY process alive server-side, so no
+ * in-sandbox multiplexer (tmux) is needed for persistence.
+ */
+export const PTY_SESSION_ID = 'teleport-agent';
 
 /** Labels used to tag and rediscover teleport sandboxes. */
 export const LABELS = {
@@ -89,13 +97,49 @@ export const AGENTS: Record<string, AgentDef> = {
     localCredFile: '.codex/auth.json',
     sandboxCredFile: '.codex/auth.json',
   },
+  gemini: {
+    name: 'gemini',
+    startCommand: 'gemini',
+    apiKeyEnv: 'GEMINI_API_KEY',
+    // Gemini CLI caches its OAuth token + settings under ~/.gemini.
+    localCredFile: '.gemini/oauth_creds.json',
+    sandboxCredFile: '.gemini/oauth_creds.json',
+    companionFiles: [{ local: '.gemini/settings.json', sandbox: '.gemini/settings.json' }],
+  },
+  copilot: {
+    name: 'copilot',
+    startCommand: 'copilot',
+    apiKeyEnv: 'COPILOT_GITHUB_TOKEN',
+  },
   opencode: {
     name: 'opencode',
     startCommand: 'opencode',
     localCredFile: '.local/share/opencode/auth.json',
     sandboxCredFile: '.local/share/opencode/auth.json',
   },
+  kimi: {
+    name: 'kimi',
+    startCommand: 'kimi',
+    apiKeyEnv: 'KIMI_API_KEY',
+  },
+  kilo: {
+    name: 'kilo',
+    startCommand: 'kilo',
+    // Kilo manages its own auth in the sandbox; no single API-key env var.
+  },
+  goose: {
+    name: 'goose',
+    startCommand: 'goose',
+    // Goose stores provider config under ~/.config/goose and uses its own keyring.
+  },
+  pi: {
+    name: 'pi',
+    startCommand: 'pi',
+  },
 };
+
+/** Command names of every known agent, in display order. */
+export const KNOWN_AGENTS = Object.keys(AGENTS);
 
 /** Returns the known-agent definition for a command, if any. */
 export function knownAgent(command: string): AgentDef | undefined {

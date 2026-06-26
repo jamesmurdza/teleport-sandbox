@@ -3,9 +3,8 @@
  */
 import { parseArgs, USAGE, type Command } from './args.js';
 import { TeleportError, getSession, listSessions, type Session } from './daytona.js';
-import { startNew, reconnect } from './runner.js';
+import { startNew, openSandboxes } from './runner.js';
 import { runDoctor } from './doctor.js';
-import { overlayMenu } from './tui/overlay.js';
 
 function out(msg: string): void {
   process.stdout.write(msg + '\n');
@@ -46,51 +45,6 @@ async function listCommand(): Promise<number> {
   return 0;
 }
 
-/** `teleport` with no args: pick a sandbox to reconnect to, or start fresh. */
-async function pickerCommand(): Promise<number> {
-  // Loop so "Switch sandbox" from the in-sandbox menu returns here to pick again.
-  for (;;) {
-    const sessions = await listSessions();
-    if (sessions.length === 0) {
-      out('No open sandboxes. Run `teleport <command>` to start one.');
-      return 0;
-    }
-
-    const choice = await overlayMenu<Session | 'new' | null>(
-      'Open sandboxes — reconnect (Ctrl-D deletes):',
-      [
-        ...sessions.map((s) => ({
-          label: formatSession(s),
-          value: s as Session | 'new' | null,
-        })),
-        { label: 'Start a new sandbox here', value: 'new' as const },
-      ],
-      {
-        fullscreen: true,
-        onDelete: async (item) => {
-          const s = item.value;
-          if (!s || s === 'new') return false; // only real sandboxes are deletable
-          try {
-            await s.sandbox.delete();
-            return true;
-          } catch {
-            return false;
-          }
-        },
-      },
-    );
-
-    if (!choice) return 0;
-    if (choice === 'new') {
-      out('Run `teleport <command>` to start a new sandbox.');
-      return 0;
-    }
-    const outcome = await reconnect(choice);
-    if (outcome !== 'switch') return 0;
-    // 'switch': loop back to re-render the picker with a fresh sandbox list.
-  }
-}
-
 async function stopCommand(id: string): Promise<number> {
   const s = await getSession(id);
   await s.sandbox.stop();
@@ -117,7 +71,8 @@ async function dispatch(cmd: Command): Promise<number> {
       out(USAGE);
       return 0;
     case 'list':
-      return pickerCommand();
+      await openSandboxes();
+      return 0;
     case 'ls':
       return listCommand();
     case 'doctor':
@@ -128,16 +83,43 @@ async function dispatch(cmd: Command): Promise<number> {
       return rmCommand(cmd.id);
     case 'push':
       return pushCommand(cmd.id);
-    case 'run': {
-      const outcome = await startNew({ command: cmd.command, args: cmd.args, yolo: cmd.yolo });
-      // "Switch sandbox" from the in-sandbox menu drops back to the picker.
-      if (outcome === 'switch') return pickerCommand();
+    case 'run':
+      // The session loop handles in-session switches; this returns when done.
+      await startNew({ command: cmd.command, args: cmd.args, yolo: cmd.yolo });
       return 0;
-    }
   }
 }
 
+/**
+ * Sequence that returns the terminal to a sane state: mouse reporting off,
+ * autowrap on, cursor visible, and back out of the alternate screen. The
+ * compositor normally does this on teardown, but if anything throws mid-session
+ * we must still run it — otherwise the user is left with a corrupted terminal
+ * (stuck in alt-screen with mouse escapes leaking, as `^[[<64;…M`).
+ */
+const TERM_RESET =
+  '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1004l\x1b[?7h\x1b[?25h\x1b[?1049l';
+
+function restoreTerminal(): void {
+  try {
+    if (process.stdout.isTTY) process.stdout.write(TERM_RESET);
+    if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(false);
+  } catch {
+    /* best effort */
+  }
+}
+
+/** Last-resort handler: restore the terminal, print a clean error, exit. */
+function onFatal(err: unknown): void {
+  restoreTerminal();
+  const msg = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`\nteleport: ${msg}\n`);
+  process.exit(1);
+}
+
 async function main(): Promise<void> {
+  process.on('uncaughtException', onFatal);
+  process.on('unhandledRejection', onFatal);
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed.type === 'error') {
     process.stderr.write(parsed.message + '\n\n' + USAGE);
