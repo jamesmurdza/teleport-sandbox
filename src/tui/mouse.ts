@@ -3,7 +3,7 @@
  *
  * In the raw-passthrough model mouse "just works": the agent's DECSET enable
  * sequence reaches the real terminal, and the terminal's mouse reports flow
- * straight back. Once teleport interposes a headless emulator, that path is
+ * straight back. Once sbx interposes a headless emulator, that path is
  * severed in both directions, so we re-bridge it explicitly:
  *
  *   1. We force SGR mouse reporting (1006) on the *real* terminal whenever the

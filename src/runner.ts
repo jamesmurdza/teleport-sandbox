@@ -1,8 +1,8 @@
 /**
  * High-level orchestration for starting a new sandbox and reconnecting to an
  * existing one: ties together repo inspection, the credential modal, sandbox
- * creation, repo clone + teleport branch, and auto-push. A single
- * `runSessionLoop` then drives one persistent `TeleportSession` (one compositor),
+ * creation, repo clone + sbx branch, and auto-push. A single
+ * `runSessionLoop` then drives one persistent `SbxSession` (one compositor),
  * swapping sandboxes in place on a switch so there's no teardown/flash.
  */
 import { knownAgent, yoloFlagFor, KNOWN_AGENTS, SANDBOX_REPO_PATH } from './config.js';
@@ -26,13 +26,13 @@ import { join } from 'node:path';
 import { resolveGitHubToken } from './git/auth.js';
 import { setupRepo } from './git/repo.js';
 import { AutoPush, type PushStatus } from './git/autopush.js';
-import { TeleportSession, statusBridge, type AttachSpec, type SessionDeps } from './session.js';
+import { SbxSession, statusBridge, type AttachSpec, type SessionDeps } from './session.js';
 import type { BarInfo } from './tui/statusbar.js';
 import type { SidebarItem } from './tui/sidebar.js';
 import { overlayMenu, overlayConfirm } from './tui/overlay.js';
 
 function log(msg: string): void {
-  process.stdout.write(`teleport: ${msg}\n`);
+  process.stdout.write(`sbx: ${msg}\n`);
 }
 
 /**
@@ -80,7 +80,7 @@ const TERMINAL_PRESENT: Present = {
   menu: (title, items) => overlayMenu(title, items, { fullscreen: true }),
 };
 
-function sessionPresent(session: TeleportSession): Present {
+function sessionPresent(session: SbxSession): Present {
   return {
     note: (m) => session.connecting(m),
     confirm: (q) => session.confirm(q),
@@ -122,7 +122,7 @@ function sidebarItemOf(s: Session): SidebarItem {
   };
 }
 
-/** Full flow for `teleport <command>`: create the sandbox, then run the session. */
+/** Full flow for `sbx <command>`: create the sandbox, then run the session. */
 export async function startNew(opts: StartOptions): Promise<void> {
   const first = await prepareNew(opts);
   if (first) await runSessionLoop(first);
@@ -192,7 +192,7 @@ async function prepareNew(opts: StartOptions, present: Present = TERMINAL_PRESEN
     present.note(`${opts.command} credentials: ${result.summary}`);
   }
 
-  // Clone repo + create teleport branch + start auto-push.
+  // Clone repo + create sbx branch + start auto-push.
   let cwdInSandbox: string | undefined;
   let autopush: AutoPush | undefined;
   const status = statusBridge();
@@ -297,7 +297,7 @@ async function prepareClaudeConfig(
 }
 
 /**
- * `teleport` with no args: attach to the most-recent sandbox with the sidebar
+ * `sbx` with no args: attach to the most-recent sandbox with the sidebar
  * open as the entry menu, or — when there are none — open the menu idle so it
  * still works (and you can create one).
  */
@@ -391,7 +391,7 @@ async function runSessionLoop(first: Prepared | null, autoNew = false, initialNo
       await (await getSession(id)).sandbox.delete();
     },
   };
-  const session = new TeleportSession(deps);
+  const session = new SbxSession(deps);
   if (autoNew) session.queueNew(); // open the new-sandbox menu as soon as the UI is up
   let current = first;
   let stoppedView: Session | null = null; // a stopped sandbox being previewed
@@ -450,7 +450,7 @@ async function runSessionLoop(first: Prepared | null, autoNew = false, initialNo
             stoppedView = null;
           } catch (err) {
             // Starting/preparing the target failed (e.g. it was just deleted).
-            // Stay in teleport — drop to the sidebar with a note.
+            // Stay in sbx — drop to the sidebar with a note.
             current = null;
             stoppedView = null;
             idleNote = `couldn't reach ${id.slice(0, 8)} — ${oneLine(err)}`;
@@ -487,7 +487,7 @@ async function runSessionLoop(first: Prepared | null, autoNew = false, initialNo
       }
 
       // A sandbox whose agent had already exited when we attached (it produced no
-      // output and ended at once) must not eject the user from teleport. Drop back
+      // output and ended at once) must not eject the user from sbx. Drop back
       // to the sidebar instead: the spent PTY was cleared, so re-selecting the
       // sandbox relaunches its agent fresh — or they can switch, delete, or exit.
       if (outcome === 'ended' && session.wasDeadOnArrival()) {
@@ -500,8 +500,8 @@ async function runSessionLoop(first: Prepared | null, autoNew = false, initialNo
       if (current) {
         endMsg =
           outcome === 'detached'
-            ? `detached. Reconnect with \`teleport\` (${current.spec.sandbox.id} keeps running, auto-stops when idle).`
-            : `session ended. Remove the sandbox with \`teleport rm ${current.spec.sandbox.id}\`.`;
+            ? `detached. Reconnect with \`sbx\` (${current.spec.sandbox.id} keeps running, auto-stops when idle).`
+            : `session ended. Remove the sandbox with \`sbx rm ${current.spec.sandbox.id}\`.`;
       }
       break;
     }
@@ -515,7 +515,7 @@ async function runSessionLoop(first: Prepared | null, autoNew = false, initialNo
 const CUSTOM_CHOICE = ' custom';
 
 /** Asks which agent/command to run for a new sandbox (modal in the agent pane). */
-async function pickNewCommand(session: TeleportSession): Promise<string | null> {
+async function pickNewCommand(session: SbxSession): Promise<string | null> {
   const choice = await session.menu<string>('New sandbox — choose an agent', [
     ...NEW_AGENTS.map((a) => ({ label: a, value: a })),
     { label: 'Custom command…', value: CUSTOM_CHOICE },
@@ -526,7 +526,7 @@ async function pickNewCommand(session: TeleportSession): Promise<string | null> 
 }
 
 /** Creates a new sandbox from the in-session sidebar, keeping the chrome up. */
-async function createInSession(session: TeleportSession): Promise<Prepared | null> {
+async function createInSession(session: SbxSession): Promise<Prepared | null> {
   const command = await pickNewCommand(session);
   if (!command) return null;
   const [cmd, ...args] = command.trim().split(/\s+/);

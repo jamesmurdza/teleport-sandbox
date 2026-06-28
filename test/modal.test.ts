@@ -37,12 +37,12 @@ test('modalFrame info renders the title and lines', () => {
   const state: ModalState = {
     kind: 'info',
     title: 'Sandbox abc',
-    lines: ['ID       abc123', 'Branch   teleport/main/abc'],
+    lines: ['ID       abc123', 'Branch   sbx/main/abc'],
     resolve: () => {},
   };
   const t = text(modalFrame(state, 50, 12));
   assert.ok(t.includes('Sandbox abc'));
-  assert.ok(t.includes('teleport/main/abc'));
+  assert.ok(t.includes('sbx/main/abc'));
   assert.ok(t.includes('Esc to close'));
 });
 

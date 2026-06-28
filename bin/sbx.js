@@ -9,7 +9,7 @@ const compiled = join(here, '..', 'dist', 'cli.js');
 
 if (!existsSync(compiled)) {
   console.error(
-    'teleport: build output not found. Run `npm run build` first (or `npm install` if you have not).',
+    'sbx: build output not found. Run `npm run build` first (or `npm install` if you have not).',
   );
   process.exit(1);
 }

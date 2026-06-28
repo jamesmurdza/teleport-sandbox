@@ -1,6 +1,6 @@
 /**
  * Read-only introspection of the user's LOCAL git repository (the cwd where
- * `teleport` was invoked). Used to decide whether to clone, which branch to
+ * `sbx` was invoked). Used to decide whether to clone, which branch to
  * clone, and whether to warn about unpushed/dirty state.
  */
 import { execFile } from 'node:child_process';

@@ -1,10 +1,10 @@
 {
-  "name": "teleport-cli",
+  "name": "@jamesmurdza/sbx",
   "version": "0.1.0",
-  "description": "Teleport into a fresh Daytona sandbox and run an AI coding agent, with credential import, auto git push, and detach/reconnect.",
+  "description": "Run sandboxed AI coding agents in fresh Daytona sandboxes, with credential import, auto git push, and detach/reconnect.",
   "type": "module",
   "bin": {
-    "teleport": "./bin/teleport.js"
+    "sbx": "./bin/sbx.js"
   },
   "files": [
     "bin",
@@ -15,7 +15,7 @@
     "dev": "tsc -p tsconfig.json --watch",
     "test": "node --test --import tsx ./test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "start": "node bin/teleport.js"
+    "start": "node bin/sbx.js"
   },
   "engines": {
     "node": ">=20"

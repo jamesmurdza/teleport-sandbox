@@ -1,7 +1,7 @@
 /**
- * Local status bar, drawn by teleport itself on the bottom row of the screen.
+ * Local status bar, drawn by sbx itself on the bottom row of the screen.
  *
- * Under the local-compositor model teleport owns the terminal grid (the agent is
+ * Under the local-compositor model sbx owns the terminal grid (the agent is
  * rendered from a headless emulator into rows 1..rows-1), so the bar is just an
  * ANSI line we paint on the last row from data we already have locally. This
  * replaces the previous approach where a tmux instance *inside the sandbox* drew
@@ -28,13 +28,13 @@ function truncate(s: string, w: number): string {
 }
 
 /**
- * Reduces a teleport working branch to the human base branch for display.
- * `teleport/<base>/<sandbox-id>` -> `<base>` (the id is already shown on the
+ * Reduces a sbx working branch to the human base branch for display.
+ * `sbx/<base>/<sandbox-id>` -> `<base>` (the id is already shown on the
  * left of the bar). Other branch names are shown unchanged.
  */
 export function displayBranch(branch: string): string {
-  if (!branch.startsWith('teleport/')) return branch;
-  return branch.slice('teleport/'.length).replace(/\/[0-9a-f]{6,}$/i, '');
+  if (!branch.startsWith('sbx/')) return branch;
+  return branch.slice('sbx/'.length).replace(/\/[0-9a-f]{6,}$/i, '');
 }
 
 /** The plain (un-styled) left and right segments of the bar. */

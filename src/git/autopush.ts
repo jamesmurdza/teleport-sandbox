@@ -1,5 +1,5 @@
 /**
- * Watches the sandbox repo for new commits on the teleport working branch and
+ * Watches the sandbox repo for new commits on the sbx working branch and
  * pushes them to GitHub via the git toolbox (token passed per-call, never stored
  * in the sandbox). Pushing is debounced by the poll interval and serialised so
  * overlapping pushes never run. The original/base branch is never pushed.
@@ -49,7 +49,7 @@ export class AutoPush {
         await run(this.sandbox, `git -C ${this.opts.repoPath} rev-parse --abbrev-ref HEAD`)
       ).trim();
 
-      // Safety: only ever push our own teleport branch.
+      // Safety: only ever push our own sbx branch.
       if (current !== this.opts.branch) return;
       if (!head || head === this.lastPushedSha) return;
 
@@ -64,7 +64,7 @@ export class AutoPush {
     }
   }
 
-  /** Pushes immediately if there is anything new (used by `teleport push`). */
+  /** Pushes immediately if there is anything new (used by `sbx push`). */
   async pushNow(): Promise<void> {
     await this.tick();
   }
