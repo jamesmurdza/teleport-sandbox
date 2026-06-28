@@ -97,10 +97,16 @@ agents include `claude`, `codex`, `gemini`, `copilot`, `opencode`, `goose`,
 | `claude` | `ANTHROPIC_API_KEY` | `Claude Code-credentials` | `~/.claude/.credentials.json` |
 | `codex` | `OPENAI_API_KEY` | — | `~/.codex/auth.json` |
 | `gemini` | `GEMINI_API_KEY` | — | `~/.gemini/oauth_creds.json` |
+| `copilot` | `COPILOT_GITHUB_TOKEN` | — | — |
 | `opencode` | — | — | `~/.local/share/opencode/auth.json` |
+| `kimi` | `KIMI_API_KEY` | — | — |
 
 For keychain/file logins, `claude` also copies `~/.claude.json` so it recognises
-your account instead of re-running onboarding.
+your account instead of re-running onboarding, and `gemini` copies
+`~/.gemini/settings.json` alongside its OAuth token.
+
+`kilo`, `goose`, and `pi` manage their own auth inside the sandbox, so there's
+nothing to import for them.
 
 ## Other commands
 
