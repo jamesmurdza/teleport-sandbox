@@ -1,6 +1,6 @@
 /**
  * Opens a URL in the user's default browser (best-effort, cross-platform).
- * teleport runs locally, so this launches the local browser.
+ * sbx runs locally, so this launches the local browser.
  */
 import { spawn } from 'node:child_process';
 import { platform } from 'node:os';

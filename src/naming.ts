@@ -1,5 +1,5 @@
 /**
- * Pure helpers for deriving the teleport working-branch name. Kept separate and
+ * Pure helpers for deriving the sbx working-branch name. Kept separate and
  * dependency-free so it is easy to unit test.
  */
 
@@ -15,14 +15,14 @@ export function sanitiseRef(part: string): string {
 }
 
 /**
- * The always-unique working branch teleport creates off the base branch.
- * Format: teleport/<base>/<sandbox-short-id>. The short-id suffix guarantees
+ * The always-unique working branch sbx creates off the base branch.
+ * Format: sbx/<base>/<sandbox-short-id>. The short-id suffix guarantees
  * that multiple agents launched from the same base branch never collide.
  */
-export function teleportBranch(baseBranch: string, sandboxId: string): string {
+export function sbxBranch(baseBranch: string, sandboxId: string): string {
   const base = sanitiseRef(baseBranch || 'main');
   const shortId = shortSandboxId(sandboxId);
-  return `teleport/${base}/${shortId}`;
+  return `sbx/${base}/${shortId}`;
 }
 
 /** First 8 alphanumerics of the sandbox id, used as a unique branch suffix. */
@@ -40,10 +40,10 @@ export function slugifyName(s: string): string {
 
 /**
  * Builds the sandbox name from the prefix, the repo/agent, and a unique suffix,
- * e.g. `teleport-myrepo-l8k2p9`. Components that slugify to empty are dropped.
+ * e.g. `sbx-myrepo-l8k2p9`. Components that slugify to empty are dropped.
  */
 export function sandboxName(prefix: string, slug: string | null, suffix: string): string {
-  return [slugifyName(prefix) || 'teleport', slugifyName(slug ?? ''), slugifyName(suffix)]
+  return [slugifyName(prefix) || 'sbx', slugifyName(slug ?? ''), slugifyName(suffix)]
     .filter(Boolean)
     .join('-');
 }

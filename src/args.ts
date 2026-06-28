@@ -1,14 +1,14 @@
 /**
  * Pure command-line parser. Kept side-effect free so it can be unit tested.
  *
- *   teleport                 -> list/reconnect picker
- *   teleport <cmd> [args...] -> create-or-reconnect and run <cmd>
- *   teleport ls              -> non-interactive sandbox list
- *   teleport stop <id>       -> stop a sandbox
- *   teleport rm <id>         -> delete a sandbox
- *   teleport push [<id>]     -> push pending commits now
- *   teleport doctor          -> preflight diagnostics
- *   teleport help            -> usage
+ *   sbx                 -> list/reconnect picker
+ *   sbx <cmd> [args...] -> create-or-reconnect and run <cmd>
+ *   sbx ls              -> non-interactive sandbox list
+ *   sbx stop <id>       -> stop a sandbox
+ *   sbx rm <id>         -> delete a sandbox
+ *   sbx push [<id>]     -> push pending commits now
+ *   sbx doctor          -> preflight diagnostics
+ *   sbx help            -> usage
  */
 
 export type Command =
@@ -26,7 +26,7 @@ export type ParseResult = Command | { type: 'error'; message: string };
 const RESERVED = new Set(['ls', 'stop', 'rm', 'push', 'doctor', 'help']);
 
 export function parseArgs(argv: string[]): ParseResult {
-  // Peel leading teleport options before the command. Permission-skipping
+  // Peel leading sbx options before the command. Permission-skipping
   // ("yolo") is the default because every session runs in a throwaway sandbox;
   // --safe / --no-yolo opts back into the agent's normal prompts.
   let yolo = true;
@@ -49,7 +49,7 @@ export function parseArgs(argv: string[]): ParseResult {
   const [first, ...rest] = argv.slice(i);
 
   if (first === undefined) {
-    if (sawFlag) return { type: 'error', message: 'that flag requires a command, e.g. `teleport claude`.' };
+    if (sawFlag) return { type: 'error', message: 'that flag requires a command, e.g. `sbx claude`.' };
     return { type: 'list' };
   }
   if (first === '--help' || first === '-h' || first === 'help') return { type: 'help' };
@@ -58,7 +58,7 @@ export function parseArgs(argv: string[]): ParseResult {
 
   if (first === 'stop' || first === 'rm') {
     const id = rest[0];
-    if (!id) return { type: 'error', message: `\`teleport ${first}\` requires a sandbox id.` };
+    if (!id) return { type: 'error', message: `\`sbx ${first}\` requires a sandbox id.` };
     return { type: first, id };
   }
 
@@ -74,28 +74,28 @@ export function parseArgs(argv: string[]): ParseResult {
   return { type: 'run', command: first, args: rest, yolo };
 }
 
-export const USAGE = `teleport — run an AI agent in a fresh Daytona sandbox
+export const USAGE = `sbx — run an AI agent in a fresh Daytona sandbox
 
 Usage:
-  teleport [--safe] <command> [args...]  Create (or reconnect to) a sandbox and run <command>
-  teleport                       List open sandboxes and reconnect
-  teleport ls                    List open sandboxes (non-interactive)
-  teleport stop <id>             Stop a sandbox
-  teleport rm <id>               Delete a sandbox
-  teleport push [<id>]           Push pending commits for a sandbox now
-  teleport doctor                Run preflight diagnostics
-  teleport help                  Show this help
+  sbx [--safe] <command> [args...]  Create (or reconnect to) a sandbox and run <command>
+  sbx                       List open sandboxes and reconnect
+  sbx ls                    List open sandboxes (non-interactive)
+  sbx stop <id>             Stop a sandbox
+  sbx rm <id>               Delete a sandbox
+  sbx push [<id>]           Push pending commits for a sandbox now
+  sbx doctor                Run preflight diagnostics
+  sbx help                  Show this help
 
 Options:
   --safe, --no-yolo              Keep the agent's permission/approval prompts.
-                                 By default teleport skips them (sandbox is
+                                 By default sbx skips them (sandbox is
                                  throwaway): claude --dangerously-skip-permissions,
                                  codex --yolo, gemini --yolo, etc.
   --yolo, --dangerous, -y        Explicitly request the default (skip prompts).
 
 Environment:
   DAYTONA_API_KEY                Required. Daytona API key.
-  TELEPORT_SNAPSHOT              Base snapshot (default: background-agents).
-  TELEPORT_PREFIX                Sandbox name prefix (default: teleport).
+  SBX_SNAPSHOT              Base snapshot (default: background-agents).
+  SBX_PREFIX                Sandbox name prefix (default: sbx).
   GH_TOKEN / GITHUB_TOKEN        GitHub token for auto-push (else uses \`gh auth token\`).
 `;

@@ -4,8 +4,8 @@ import { githubBranchUrl } from '../src/open.ts';
 
 test('githubBranchUrl builds a tree URL for repo + branch', () => {
   assert.equal(
-    githubBranchUrl('me/teleport', 'teleport/main/abc123'),
-    'https://github.com/me/teleport/tree/teleport/main/abc123',
+    githubBranchUrl('me/sbx', 'sbx/main/abc123'),
+    'https://github.com/me/sbx/tree/sbx/main/abc123',
   );
 });
 

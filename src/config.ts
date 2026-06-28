@@ -5,41 +5,41 @@
 
 /**
  * The Daytona snapshot every sandbox is created from. "background-agents" is a
- * custom snapshot in your Daytona org; override with TELEPORT_SNAPSHOT if yours
+ * custom snapshot in your Daytona org; override with SBX_SNAPSHOT if yours
  * is named differently.
  */
-export const BASE_SNAPSHOT = process.env.TELEPORT_SNAPSHOT ?? 'background-agents';
+export const BASE_SNAPSHOT = process.env.SBX_SNAPSHOT ?? 'background-agents';
 
-/** Prefix applied to the name of every sandbox teleport creates. */
-export const SANDBOX_PREFIX = process.env.TELEPORT_PREFIX ?? 'teleport';
+/** Prefix applied to the name of every sandbox sbx creates. */
+export const SANDBOX_PREFIX = process.env.SBX_PREFIX ?? 'sbx';
 
 /**
  * Minutes of inactivity after which a sandbox auto-stops (0 disables). Sandboxes
  * restart on reconnect, so idle ones don't sit running. Override with
- * TELEPORT_AUTOSTOP.
+ * SBX_AUTOSTOP.
  */
-export const AUTOSTOP_MINUTES = Number(process.env.TELEPORT_AUTOSTOP ?? 30) || 0;
+export const AUTOSTOP_MINUTES = Number(process.env.SBX_AUTOSTOP ?? 30) || 0;
 
 /** Absolute path inside the sandbox where the repo is cloned. */
 export const SANDBOX_REPO_PATH = '/home/daytona/repo';
 
 /**
  * Stable id of the persistent Daytona PTY session that runs the agent. Reusing a
- * fixed id per sandbox is what lets teleport reconnect to the *same* running
+ * fixed id per sandbox is what lets sbx reconnect to the *same* running
  * agent after a detach — Daytona keeps the PTY process alive server-side, so no
  * in-sandbox multiplexer (tmux) is needed for persistence.
  */
-export const PTY_SESSION_ID = 'teleport-agent';
+export const PTY_SESSION_ID = 'sbx-agent';
 
-/** Labels used to tag and rediscover teleport sandboxes. */
+/** Labels used to tag and rediscover sbx sandboxes. */
 export const LABELS = {
-  managed: 'teleport',
-  command: 'teleport.command',
-  repo: 'teleport.repo',
-  branch: 'teleport.branch',
-  base: 'teleport.base',
-  agent: 'teleport.agent',
-  created: 'teleport.created',
+  managed: 'sbx',
+  command: 'sbx.command',
+  repo: 'sbx.repo',
+  branch: 'sbx.branch',
+  base: 'sbx.base',
+  agent: 'sbx.agent',
+  created: 'sbx.created',
 } as const;
 
 /** A credential source that can be imported into the sandbox for an agent. */
@@ -52,7 +52,7 @@ export interface CredentialSource {
   detail: string;
 }
 
-/** Definition of a known agent teleport can launch and import credentials for. */
+/** Definition of a known agent sbx can launch and import credentials for. */
 export interface AgentDef {
   /** Command name as typed, e.g. "claude". */
   name: string;
@@ -155,7 +155,7 @@ export function knownAgent(command: string): AgentDef | undefined {
 
 /**
  * Per-agent flag that skips permission/approval prompts ("yolo"/dangerous mode),
- * applied when teleport is run with --yolo. Only agents with a known flag are
+ * applied when sbx is run with --yolo. Only agents with a known flag are
  * listed; others are left untouched.
  */
 export const YOLO_FLAGS: Record<string, string> = {

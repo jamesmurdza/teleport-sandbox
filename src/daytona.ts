@@ -22,8 +22,8 @@ export function daytona(): Daytona {
   if (client) return client;
   const apiKey = process.env.DAYTONA_API_KEY;
   if (!apiKey) {
-    throw new TeleportError(
-      'DAYTONA_API_KEY is not set. Export it before running teleport.\n' +
+    throw new SbxError(
+      'DAYTONA_API_KEY is not set. Export it before running sbx.\n' +
         '  export DAYTONA_API_KEY=dtn_...',
     );
   }
@@ -31,7 +31,7 @@ export function daytona(): Daytona {
   return client;
 }
 
-/** A teleport-managed session derived from a sandbox and its labels. */
+/** A sbx-managed session derived from a sandbox and its labels. */
 export interface Session {
   id: string;
   state: string;
@@ -51,7 +51,7 @@ export interface CreateSessionParams {
   baseBranch: string | null;
 }
 
-/** Creates a fresh sandbox on the background-agents snapshot with teleport labels. */
+/** Creates a fresh sandbox on the background-agents snapshot with sbx labels. */
 export async function createSandbox(params: CreateSessionParams): Promise<Sandbox> {
   const labels: Record<string, string> = {
     [LABELS.managed]: 'true',
@@ -80,7 +80,7 @@ export async function tagBranch(sandbox: Sandbox, branch: string): Promise<void>
   await sandbox.setLabels({ ...sandbox.labels, [LABELS.branch]: branch });
 }
 
-/** Lists teleport-managed sessions, optionally filtered to a single repo slug. */
+/** Lists sbx-managed sessions, optionally filtered to a single repo slug. */
 export async function listSessions(repoSlug?: string | null): Promise<Session[]> {
   const filter: Record<string, string> = { [LABELS.managed]: 'true' };
   if (repoSlug) filter[LABELS.repo] = repoSlug;
@@ -123,4 +123,4 @@ export async function ensureStarted(sandbox: Sandbox): Promise<void> {
 }
 
 /** A custom error whose message is safe to show the user directly. */
-export class TeleportError extends Error {}
+export class SbxError extends Error {}

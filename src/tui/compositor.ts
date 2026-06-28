@@ -1,14 +1,14 @@
 /**
  * Local terminal compositor.
  *
- * teleport owns the real terminal. The agent's PTY output is parsed into a
+ * sbx owns the real terminal. The agent's PTY output is parsed into a
  * headless xterm emulator sized to the screen minus one row; each frame we diff
  * the emulator's screen to the real terminal and paint our own status bar on the
  * reserved bottom row. Keystrokes are forwarded to the PTY unchanged; mouse
  * reports are bridged (see ./mouse) and the scroll wheel drives a local
  * scrollback viewport when the agent is not itself in mouse mode.
  *
- * Why an emulator at all: it gives teleport the screen contents and cursor
+ * Why an emulator at all: it gives sbx the screen contents and cursor
  * position locally, which is what makes a robust local status bar (and, later, a
  * sidebar) possible without the fragile cursor save/restore that a dumb byte
  * pipe would need.

@@ -6,8 +6,8 @@
  * detaching just drops the WebSocket and reconnecting re-attaches to the same
  * running agent — no in-sandbox tmux is involved.
  *
- * Locally teleport is a terminal compositor: PTY output is parsed into a headless
- * emulator and rendered to the screen, with teleport drawing its own status bar
+ * Locally sbx is a terminal compositor: PTY output is parsed into a headless
+ * emulator and rendered to the screen, with sbx drawing its own status bar
  * on the bottom row and bridging mouse/scroll (see ./tui/compositor).
  *
  * Ctrl-\ (or Ctrl-]) is intercepted locally to toggle the sandbox sidebar — the
@@ -24,7 +24,7 @@ import type { BarInfo } from './tui/statusbar.js';
 import type { SidebarItem } from './tui/sidebar.js';
 import { openUrl, githubBranchUrl } from './open.js';
 
-/** Ctrl-\ (FS, 0x1c) — toggles the teleport sandbox sidebar. */
+/** Ctrl-\ (FS, 0x1c) — toggles the sbx sandbox sidebar. */
 const MENU_KEY = 0x1c;
 
 /** Everything needed to attach one sandbox into the persistent compositor. */
@@ -45,7 +45,7 @@ export interface AttachSpec {
   bindStatus?: (update: (text: string) => void) => void;
   /** Provider for the sidebar's sandbox list (polled while attached). */
   listSandboxes: () => Promise<SidebarItem[]>;
-  /** Open the sidebar immediately (entry menu for bare `teleport`, or a hand-off). */
+  /** Open the sidebar immediately (entry menu for bare `sbx`, or a hand-off). */
   openSidebar?: boolean;
 }
 
@@ -73,7 +73,7 @@ export type AttachOutcome = 'switch' | 'detached' | 'ended' | 'deleted' | 'new';
 type Pty = Awaited<ReturnType<Sandbox['process']['createPty']>>;
 
 /** Status-bar fields shown while idle (no agent attached). */
-const IDLE_BAR: BarInfo = { shortId: 'teleport', agent: '—' };
+const IDLE_BAR: BarInfo = { shortId: 'sbx', agent: '—' };
 
 /** Builds status-bar fields from a sidebar item (for an instant switch). */
 function barFromItem(item: SidebarItem): BarInfo {
@@ -165,7 +165,7 @@ async function attachPty(
  * once and reused, switching never leaves the alt screen — there is no flash to a
  * bare terminal and the sidebar stays put.
  */
-export class TeleportSession {
+export class SbxSession {
   private readonly deps: SessionDeps;
   private compositor: Compositor | null = null;
   private started = false;
@@ -214,7 +214,7 @@ export class TeleportSession {
    * True when the most recent attach ended "dead on arrival": the agent's PTY
    * resolved the instant we connected without emitting a single byte — i.e. its
    * process had already exited before we attached. The loop uses this to keep
-   * teleport open (drop to the sidebar) instead of quitting over one dead sandbox.
+   * sbx open (drop to the sidebar) instead of quitting over one dead sandbox.
    */
   wasDeadOnArrival(): boolean {
     return this.endedDead;
@@ -364,7 +364,7 @@ export class TeleportSession {
     // Dead-on-arrival: the agent PTY ended immediately and never produced a byte,
     // so its process had already exited before we attached (a previously quit or
     // crashed agent). Clear the spent PTY session so the *next* attach recreates it
-    // and relaunches the agent fresh, and flag it so the loop keeps teleport open
+    // and relaunches the agent fresh, and flag it so the loop keeps sbx open
     // instead of exiting the whole app. (Safe: wait() already resolved, so the
     // session is genuinely gone — we're only cleaning up.)
     this.endedDead = result === 'ended' && !this.sawAgentOutput;
@@ -465,7 +465,7 @@ export class TeleportSession {
     // Ctrl-C is a universal escape hatch *except* when you're typing into the
     // agent (where it's the agent's own interrupt). So in the sidebar, in a
     // modal, while idle, or mid-create — any state that isn't the live agent —
-    // a lone Ctrl-C quits teleport instead of getting swallowed. This guarantees
+    // a lone Ctrl-C quits sbx instead of getting swallowed. This guarantees
     // there's always a way out, even if an async step (e.g. creating a sandbox)
     // is wedged. Esc still just cancels the sidebar/modal.
     if (chunk.length === 1 && chunk[0] === 0x03 && this.compositor && !this.compositor.agentFocused()) {
@@ -476,7 +476,7 @@ export class TeleportSession {
   };
 
   /**
-   * Quits teleport from anywhere. If a wait is active (idle / attached / stopped
+   * Quits sbx from anywhere. If a wait is active (idle / attached / stopped
    * view) we settle it as 'detached' so the loop unwinds and disposes cleanly.
    * If we're stuck in an async window with no active wait (e.g. a hung create),
    * dispose directly and exit the process — the escape hatch must always work.

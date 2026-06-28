@@ -1,8 +1,8 @@
 /**
- * teleport entry point: parses argv and dispatches to the right flow.
+ * sbx entry point: parses argv and dispatches to the right flow.
  */
 import { parseArgs, USAGE, type Command } from './args.js';
-import { TeleportError, getSession, listSessions, type Session } from './daytona.js';
+import { SbxError, getSession, listSessions, type Session } from './daytona.js';
 import { startNew, openSandboxes } from './runner.js';
 import { runDoctor } from './doctor.js';
 
@@ -35,7 +35,7 @@ function formatSession(s: Session): string {
 async function listCommand(): Promise<number> {
   const sessions = await listSessions();
   if (sessions.length === 0) {
-    out('No teleport sandboxes. Start one with `teleport <command>`.');
+    out('No sbx sandboxes. Start one with `sbx <command>`.');
     return 0;
   }
   out('');
@@ -60,7 +60,7 @@ async function rmCommand(id: string): Promise<number> {
 }
 
 async function pushCommand(id?: string): Promise<number> {
-  out('Auto-push runs while a session is attached. To push on demand, reconnect with `teleport`.');
+  out('Auto-push runs while a session is attached. To push on demand, reconnect with `sbx`.');
   if (id) out(`(Targeted session: ${id})`);
   return 0;
 }
@@ -113,7 +113,7 @@ function restoreTerminal(): void {
 function onFatal(err: unknown): void {
   restoreTerminal();
   const msg = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`\nteleport: ${msg}\n`);
+  process.stderr.write(`\nsbx: ${msg}\n`);
   process.exit(1);
 }
 
@@ -129,10 +129,10 @@ async function main(): Promise<void> {
   try {
     process.exitCode = await dispatch(parsed);
   } catch (err) {
-    if (err instanceof TeleportError) {
-      process.stderr.write(`teleport: ${err.message}\n`);
+    if (err instanceof SbxError) {
+      process.stderr.write(`sbx: ${err.message}\n`);
     } else {
-      process.stderr.write(`teleport: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+      process.stderr.write(`sbx: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
     }
     process.exitCode = 1;
   }

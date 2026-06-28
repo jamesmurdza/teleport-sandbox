@@ -9,11 +9,11 @@ import {
   type BarInfo,
 } from '../src/tui/statusbar.ts';
 
-const info: BarInfo = { shortId: '6c73784c', agent: 'codex', repo: 'me/teleport', branch: 'teleport/main/6c73784c2d3a' };
+const info: BarInfo = { shortId: '6c73784c', agent: 'codex', repo: 'me/sbx', branch: 'sbx/main/6c73784c2d3a' };
 
-test('displayBranch reduces teleport working branches to the base', () => {
-  assert.equal(displayBranch('teleport/main/6c73784c2d3a'), 'main');
-  assert.equal(displayBranch('teleport/feature/x/abcdef12'), 'feature/x');
+test('displayBranch reduces sbx working branches to the base', () => {
+  assert.equal(displayBranch('sbx/main/6c73784c2d3a'), 'main');
+  assert.equal(displayBranch('sbx/feature/x/abcdef12'), 'feature/x');
   assert.equal(displayBranch('my-own-branch'), 'my-own-branch');
 });
 

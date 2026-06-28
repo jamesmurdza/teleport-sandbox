@@ -1,5 +1,5 @@
 /**
- * `teleport doctor` — preflight diagnostics. Reports pass/warn/fail for each
+ * `sbx doctor` — preflight diagnostics. Reports pass/warn/fail for each
  * requirement with remediation hints. Exits non-zero if a hard requirement
  * fails, so it is usable in scripts/CI.
  */
@@ -31,7 +31,7 @@ export async function runDoctor(cwd: string): Promise<number> {
     });
   } else {
     try {
-      await daytona().list({ teleport: 'true' });
+      await daytona().list({ sbx: 'true' });
       checks.push({ level: 'ok', label: 'Daytona API', detail: 'authenticated and reachable' });
     } catch (err) {
       checks.push({
@@ -97,7 +97,7 @@ export async function runDoctor(cwd: string): Promise<number> {
   }
 
   // Report.
-  process.stdout.write('\nteleport doctor\n\n');
+  process.stdout.write('\nsbx doctor\n\n');
   for (const c of checks) {
     process.stdout.write(`  ${ICON[c.level]} ${c.label.padEnd(16)} ${c.detail}\n`);
   }
